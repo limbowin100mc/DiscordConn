@@ -66,9 +66,25 @@ function classifyX(t) {
   return page((m && simple[m[1]]) || 'browse');
 }
 
+// Prime Video: "Prime Video: The Boys - Season 1"; on Amazon: "Amazon.com: Watch The Boys - Season 1 | Prime Video"
+const PRIME_PAGES = /^(home|movies|tv shows|tv|live tv|sports|store|channels|subscriptions|my stuff|watchlist|search|settings|your account|categories|free to me|deals)$/i;
+function classifyPrime(t) {
+  let m = t.match(/^Prime Video:\s*(.+)$/) || t.match(/^Amazon\.[a-z.]+:\s*(?:Watch\s+)?(.+?) \| Prime Video/i)
+    || t.match(/^(?:Watch\s+)?(.+?) \| Prime Video$/i);
+  if (!m) {
+    return /^(Welcome to )?Prime Video$/i.test(t) ? { service: 'primevideo', page: 'browse' } : null;
+  }
+  const name = m[1].trim();
+  if (PRIME_PAGES.test(name) || /^search results/i.test(name)) return { service: 'primevideo', page: 'browse' };
+  m = name.match(/^(.+?) - ((?:Season|Staffel|Saison|Temporada|Stagione|Sezona|Seizoen) .+)$/i);
+  return { service: 'primevideo', page: 'title', title: m ? m[1] : name, season: m ? m[2] : '' };
+}
+
 // What site is a (cleaned) tab title from?
 function classifyTitle(t) {
   let m;
+  const prime = classifyPrime(t);
+  if (prime) return prime;
   if ((m = t.match(/^(.+?) Live Stream - Watch Live on KICK/i))) return { service: 'kick', channel: m[1].trim() };
   // Netflix titles every signed-in page (including the player) just "Netflix".
   if (new RegExp(`^Netflix${PROFILE}`).test(t)) return { service: 'netflix', page: 'browse' };
@@ -90,6 +106,7 @@ function windowShows(cleanTitle, s) {
   return cleanTitle === s.title
     || cleanTitle.startsWith(`${s.title} - `)
     || cleanTitle.startsWith(`${s.title} | `)
+    || (/^Prime Video: /.test(cleanTitle) && s.title.length > 2 && cleanTitle.includes(s.title))
     || (s.artist && cleanTitle.startsWith(`${s.title} • ${s.artist}`));
 }
 
@@ -108,6 +125,7 @@ function timelineOf(s, now) {
 }
 
 const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+const norm = (v) => String(v || '').toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
 
 class LocalDetector extends EventEmitter {
   constructor({ scriptPath, fetcher, memoryFile = null }) {
@@ -120,6 +138,7 @@ class LocalDetector extends EventEmitter {
     this.focus = new Map(); // entry key -> last time it was in the foreground
     this.firstSeen = new Map(); // thing -> when we first saw it (for "elapsed" timers)
     this.netflixWatch = new Map(); // browser -> { id, duration } of the Netflix video last seen in its address bar
+    this.primeTitle = new Map(); // browser -> Prime Video title id last seen in its address bar
     this.mediaSite = new Map(); // "<app>|<title>" -> site, learned while that tab was showing
     this.mediaVideo = new Map(); // "<app>|<title>" -> YouTube video id, read from the address bar while showing
     this.lastMusic = new Map(); // browser -> 'spotify' | 'ytmusic', the music site last seen in it
@@ -217,6 +236,7 @@ class LocalDetector extends EventEmitter {
       return { ...w, browser: PROCESSES[w.process] || w.process, clean, info: classifyTitle(clean) };
     });
     this._trackNetflix(windows);
+    this._trackPrime(windows);
     const before = JSON.stringify([...this.lastMusic]);
     for (const w of [...windows].sort((a, b) => a.foreground - b.foreground)) {
       if (w.info && (w.info.service === 'spotify' || w.info.service === 'ytmusic')) this.lastMusic.set(w.browser, w.info.service);
@@ -278,6 +298,17 @@ class LocalDetector extends EventEmitter {
     if (titleInfo && titleInfo.service === 'kick') return this._kick(titleInfo.channel, browser, key('kick'), playing, now);
     if ((/^kick$/i.test(s.album) && s.artist) || (info && info.service === 'kick')) {
       return this._kick(s.artist || info.channel, browser, key('kick'), playing, now, s.artist ? s.title : '');
+    }
+
+    // Prime Video: either Windows gets the page title ("Prime Video: The Boys - Season 1"),
+    // or the player describes the show and we match it to the Prime tab (remembered when hidden).
+    const primeMemo = `${s.app}|${s.title}`;
+    if (titleInfo && titleInfo.service === 'primevideo' && titleInfo.page === 'title') {
+      return this._prime(titleInfo.title, titleInfo.season, browser, key('primevideo'), s, playing, now);
+    }
+    if ((info && info.service === 'primevideo') || this.mediaSite.get(primeMemo) === 'primevideo') {
+      if (info && info.service === 'primevideo') this.mediaSite.set(primeMemo, 'primevideo');
+      return this._prime(s.title, s.artist || (info && info.season) || '', browser, key('primevideo'), s, playing, now);
     }
 
     // Netflix: if it doesn't describe what's on, Windows only gets the page title "Netflix".
@@ -381,6 +412,47 @@ class LocalDetector extends EventEmitter {
     for (const b of [...this.netflixWatch.keys()]) if (!active.has(b)) this.netflixWatch.delete(b);
   }
 
+  _trackPrime(windows) {
+    // Browsers where Prime Video is playing: its page title, or a show we matched to a Prime tab earlier.
+    const active = new Set(this.raw.sessions
+      .filter((s) => classifyPrime(s.title) || this.mediaSite.get(`${s.app}|${s.title}`) === 'primevideo')
+      .map((s) => browserOfApp(s.app)));
+    for (const w of windows) {
+      if (!w.info || w.info.service !== 'primevideo') continue;
+      active.add(w.browser);
+      const m = String(w.url || '').match(/primevideo\.com\/.*?detail\/(?:[^/?#]+\/)?([0-9A-Z]{10,})/)
+        || String(w.url || '').match(/amazon\.[a-z.]+\/gp\/video\/detail\/([0-9A-Z]{10})/);
+      if (m) {
+        this.primeTitle.set(w.browser, m[1]);
+        w.info = { ...w.info, titleId: m[1] };
+      }
+    }
+    for (const b of [...this.primeTitle.keys()]) if (!active.has(b)) this.primeTitle.delete(b);
+  }
+
+  _prime(title, episode, browser, key, s, playing, now) {
+    const id = this.primeTitle.get(browser);
+    const info = id ? this.lookups.primevideo(id) : null;
+    // Only use the looked-up cover if it's the same title (the address may be from another page).
+    const same = info && title && norm(info.title).startsWith(norm(title));
+    return {
+      key,
+      browser,
+      service: 'primevideo',
+      source: 'built-in',
+      data: {
+        page: 'watch',
+        title: title || (info && info.title) || '',
+        episode: episode || '',
+        image: same ? info.image : null,
+        url: id ? `https://www.primevideo.com/detail/${id}` : null,
+        playing,
+        timeline: timelineOf(s, now),
+        watchStart: this._seen(`pv:${title}`, now),
+      },
+    };
+  }
+
   _netflix(title, episode, browser, key, s, playing, now) {
     // Netflix didn't say what's on: use the video from the address bar.
     const seen = title ? null : this.netflixWatch.get(browser);
@@ -472,6 +544,8 @@ class LocalDetector extends EventEmitter {
         return { ...base, data: { ...info.data, sessionStart } };
       case 'youtube':
         return { ...base, data: { page: info.page === 'home' ? 'home' : 'browse', sessionStart } };
+      case 'primevideo':
+        return { ...base, data: { page: info.page, title: info.title || '', sessionStart } };
       case 'netflix': {
         const t = info.titleId ? this.lookups.netflix(info.titleId) : null;
         return { ...base, data: { page: info.page, title: info.title || (t && t.title) || '', sessionStart } };

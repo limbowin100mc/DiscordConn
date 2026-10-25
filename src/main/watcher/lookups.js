@@ -152,6 +152,28 @@ class Lookups {
     });
   }
 
+  // A Prime Video title's name and cover art from its public page: { title, image } or null.
+  primevideo(id) {
+    return this._get(`pv:${id}`, 6 * 3600e3, async () => {
+      const res = await this.fetch(`https://www.primevideo.com/detail/${encodeURIComponent(id)}`, {
+        headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.8' },
+      });
+      if (!res.ok) throw new Error(`primevideo ${res.status}`);
+      const html = await res.text();
+      const t = html.match(/<title>Prime Video:\s*([^<]+)<\/title>/);
+      if (!t) return null;
+      const title = t[1].replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').trim();
+      // The page's first "images" block belongs to the title itself (later ones are recommendations).
+      const images = html.match(/"images":\{[^{}]*"(?:packshot|covershot)"[^{}]*\}/);
+      let image = null;
+      if (images) {
+        const pick = images[0].match(/"packshot":"(https:[^"]+)"/) || images[0].match(/"covershot":"(https:[^"]+)"/);
+        if (pick && pick[1].length <= 256) image = pick[1].replace(/\\u002F/g, '/');
+      }
+      return { title, image };
+    });
+  }
+
   // Kick channel info by display name, or null.
   kick(name) {
     return this._get(`kick:${name}`, 60000, async () => {

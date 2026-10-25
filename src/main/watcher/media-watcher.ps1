@@ -50,7 +50,7 @@ public static class PresenceHubWin {
 }
 '@
 
-# For windows showing a YouTube, YouTube Music or Netflix tab we read the address bar
+# For windows showing a YouTube, YouTube Music, Netflix or Prime Video tab we read the address bar
 # (the video id), so what's playing is still known after you switch tabs or to a game.
 # Netflix needs it most: it titles every page just "Netflix". Other sites aren't read.
 Add-Type -AssemblyName UIAutomationClient
@@ -70,7 +70,7 @@ function SiteAddress([string]$hwnd) {
     if (-not $el) { $el = $UIA::FromHandle([IntPtr][long]$hwnd).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $addressBar) }
     if ($el) { $url = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }
   } catch { $el = $null }
-  if ($url -notmatch '(^|[/.])(youtube\.com|netflix\.com)/') { $url = '' }
+  if ($url -notmatch '(^|[/.])(youtube\.com|netflix\.com|primevideo\.com)/|(^|[/.])amazon\.[a-z.]+/gp/video/') { $url = '' }
   $addressCache[$hwnd] = @{ element = $el; url = $url; at = $now }
   return $url
 }
@@ -133,7 +133,7 @@ while ($true) {
       $name = ProcessName ([int]$w[2])
       if ($name -match $BrowserProcesses) {
         $entry = [ordered]@{ id = $w[0]; title = $w[1]; process = $name; foreground = ($w[3] -eq '1') }
-        if ($w[1] -match '^Netflix(\s|$)| - YouTube( |$)| \| YouTube Music( |$)') { $entry.url = SiteAddress $w[0]; $seenWindows[$w[0]] = $true }
+        if ($w[1] -match '^Netflix(\s|$)| - YouTube( |$)| \| YouTube Music( |$)|^Prime Video[: ]|\| Prime Video') { $entry.url = SiteAddress $w[0]; $seenWindows[$w[0]] = $true }
         $windows += $entry
       }
     }

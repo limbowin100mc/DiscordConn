@@ -14,6 +14,7 @@ Show what you're doing in your browser as your **Discord activity**: the YouTube
 |---|---|---|
 | YouTube | Watching YouTube | Video title, channel, thumbnail, time left, "Watch on YouTube" button |
 | Netflix | Watching Netflix | Show and episode (or movie), artwork, time left |
+| Prime Video | Watching Prime Video | Show and season (or movie), cover art, time left |
 | Spotify (web player) | Listening to Spotify | Song, artist, album cover, time left |
 | YouTube Music | Listening to YouTube Music | Song, artist, cover, time left |
 | Kick | Watching Kick | Streamer, stream title, category, profile picture, "Watch Stream" button |
@@ -39,7 +40,8 @@ If several things are open, it shows, in this order:
 ### Built-in detection: good to know
 - Windows only knows about tabs that play media, one per browser at a time (the latest one). Sites without media, like X, are seen when they're the tab showing in a browser window. Minimized windows count.
 - Spotify is recognised by its album info, so a song from another music site may show up as Spotify too.
-- While a YouTube, YouTube Music or Netflix tab is showing, the app reads that window's address bar (only for those sites) to remember exactly what's playing. It keeps showing after you switch to another tab, minimize the browser, or play a game.
+- While a YouTube, YouTube Music, Netflix or Prime Video tab is showing, the app reads that window's address bar (only for those sites) to remember exactly what's playing. It keeps showing after you switch to another tab, minimize the browser, or play a game.
+- Prime Video titles its pages "Prime Video: The Boys - Season 1", so the show and season are known even in a background tab. The exact episode needs the extension. The cover comes from the show's public page, found through the address bar while the tab is showing.
 - YouTube Music titles its tab just "YouTube Music" except on a song's own page. A track playing while that tab is showing, or in a browser where YouTube Music was the last music site you used, counts as YouTube Music.
 - Netflix titles every page just "Netflix" and doesn't tell Windows what's on. So while a Netflix tab is showing, the app reads that window's address bar (only for Netflix) to get the video number, and looks the show and episode up on Netflix's public title page. It keeps the show after you switch tabs. If another episode starts while the tab is hidden, the episode is updated once the tab is shown again.
 - Media in private/incognito windows is visible to Windows as well. Pause sharing (tray icon or the switch) if you don't want that shown.

@@ -5,6 +5,7 @@
 const services = [
   require('./youtube'),
   require('./netflix'),
+  require('./primevideo'),
   require('./spotify'),
   require('./ytmusic'),
   require('./kick'),

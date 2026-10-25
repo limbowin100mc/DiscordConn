@@ -1,6 +1,6 @@
 'use strict';
 
-const NAMES = { youtube: 'YouTube', ytmusic: 'YouTube Music', spotify: 'Spotify', kick: 'Kick', x: 'X', netflix: 'Netflix' };
+const NAMES = { youtube: 'YouTube', ytmusic: 'YouTube Music', spotify: 'Spotify', kick: 'Kick', x: 'X', netflix: 'Netflix', primevideo: 'Prime Video' };
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -16,6 +16,7 @@ function describe(service, d) {
   if (service === 'spotify') return d.title ? `${d.title}${d.artists && d.artists.length ? ` — ${d.artists.join(', ')}` : ''}` : 'Nothing playing';
   if (service === 'kick') return d.channel ? `${d.channel}${d.live ? ' (live)' : ''}` : 'Browsing';
   if (service === 'x') return d.page ? `On X · ${d.page}` : 'On X';
+  if (service === 'primevideo') return d.title ? `${d.title}${d.episode ? ` · ${d.episode}` : ''}` : d.page === 'watch' ? 'Watching' : 'Browsing';
   if (service === 'netflix') return d.title ? `${d.title}${d.episode ? ` · ${d.episode}` : ''}` : d.page === 'watch' ? 'Watching' : 'Browsing';
   return service;
 }
@@ -52,7 +53,7 @@ function render(res) {
 
   const list = (res && res.tabs) || [];
   if (!list.length) {
-    tabs.append(el('div', 'empty', 'No supported sites open (YouTube, YouTube Music, Netflix, Spotify, Kick, X).'));
+    tabs.append(el('div', 'empty', 'No supported sites open (YouTube, YouTube Music, Netflix, Prime Video, Spotify, Kick, X).'));
     return;
   }
   for (const t of list) {

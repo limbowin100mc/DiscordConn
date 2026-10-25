@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Presence Hub Connector",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Lets the Presence Hub desktop app show the video, stream or song you have open as your Discord activity.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -33,7 +33,11 @@
     "https://kick.com/*",
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://www.netflix.com/*"
+    "https://www.netflix.com/*",
+    "https://www.primevideo.com/*",
+    "https://www.amazon.com/gp/video/*",
+    "https://www.amazon.co.uk/gp/video/*",
+    "https://www.amazon.de/gp/video/*"
   ],
   "content_scripts": [
     {
@@ -104,6 +108,19 @@
       "js": [
         "content/common.js",
         "content/netflix.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.primevideo.com/*",
+        "https://www.amazon.com/gp/video/*",
+        "https://www.amazon.co.uk/gp/video/*",
+        "https://www.amazon.de/gp/video/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/primevideo.js"
       ],
       "run_at": "document_idle"
     }
