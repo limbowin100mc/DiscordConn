@@ -1,0 +1,435 @@
+'use strict';
+
+// Built-in detection, no browser extension needed. Works with every browser:
+//  - Windows media sessions: what's playing in any tab (even in the background),
+//    with title, artist, album, play state, position and length.
+//  - Browser window titles: the tab each browser window is showing (used for X,
+//    and to tell which site a media session belongs to).
+// Produces the same "tab" entries as the extension bridge, so the engine treats
+// both the same way.
+
+const { spawn } = require('child_process');
+const { EventEmitter } = require('events');
+const { Lookups } = require('./lookups');
+
+// Media session app ids (AUMIDs) of browsers.
+const MEDIA_APPS = [
+  [/^chrome([._!-]|$)/i, 'Chrome'],
+  [/^msedge/i, 'Edge'],
+  [/^brave/i, 'Brave'],
+  [/^opera/i, 'Opera'],
+  [/^vivaldi/i, 'Vivaldi'],
+  [/^(firefox|308046B0AF4A39CB)/i, 'Firefox'],
+  [/^chromium/i, 'Chromium'],
+  [/^TheBrowserCompany\.Arc/i, 'Arc'],
+  [/^(thorium|zen|waterfox|librewolf|floorp)/i, null],
+];
+const PROCESSES = {
+  chrome: 'Chrome', msedge: 'Edge', brave: 'Brave', opera: 'Opera', vivaldi: 'Vivaldi', firefox: 'Firefox',
+  chromium: 'Chromium', arc: 'Arc', thorium: 'Thorium', zen: 'Zen', waterfox: 'Waterfox', librewolf: 'LibreWolf',
+  floorp: 'Floorp', browser: 'Yandex',
+};
+
+function browserOfApp(app) {
+  for (const [re, name] of MEDIA_APPS) {
+    const m = String(app || '').match(re);
+    if (m) return name || m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+  }
+  return null;
+}
+
+const BROWSER_SUFFIX = /\s[-—–]\s(?:Google Chrome(?: for Testing)?|Chromium|Brave|Opera(?: GX)?|Vivaldi|(?:Mozilla )?Firefox|Microsoft​? ?Edge|Arc|Thorium|Zen Browser|Waterfox|LibreWolf|Floorp|Yandex(?: Browser)?)$/;
+
+// "Video - YouTube and 3 more pages - Personal - Microsoft Edge" -> "Video - YouTube - Personal"
+function cleanWindowTitle(title) {
+  return String(title || '')
+    .replace(BROWSER_SUFFIX, '')
+    .replace(/ and \d+ more pages?(?= - |$)/, '')
+    .replace(/^\(\d+\+?\)\s*/, '') // unread counts like "(3) Home / X"
+    .trim();
+}
+
+const PROFILE = '(?: - [^-]+)?$'; // Edge adds " - <profile name>"
+
+function classifyX(t) {
+  const page = (p, extra = {}) => ({ service: 'x', data: { page: p, ...extra } });
+  let m;
+  if ((m = t.match(/^(.+?) \(@([A-Za-z0-9_]{1,15})\) \/ X/))) return page('profile', { displayName: m[1], username: m[2], url: `https://x.com/${m[2]}` });
+  if ((m = t.match(/^(.+?) on X: /))) return page('post', { displayName: m[1] });
+  if ((m = t.match(/^(.+?) - Search \/ X/))) return page('search', { query: m[1] });
+  const simple = {
+    Home: 'home', 'X. It’s what’s happening': 'home', Explore: 'explore', Notifications: 'notifications', Messages: 'messages',
+    Chat: 'messages', Bookmarks: 'bookmarks', Grok: 'grok', Lists: 'lists', Communities: 'communities', Settings: 'settings',
+    'Your account': 'settings', 'Compose new post': 'compose', 'Post': 'post', Search: 'search', Spaces: 'space',
+  };
+  m = t.match(/^(.+?) \/ X/);
+  return page((m && simple[m[1]]) || 'browse');
+}
+
+// What site is a (cleaned) tab title from?
+function classifyTitle(t) {
+  let m;
+  if ((m = t.match(/^(.+?) Live Stream - Watch Live on KICK/i))) return { service: 'kick', channel: m[1].trim() };
+  // Netflix titles every signed-in page (including the player) just "Netflix".
+  if (new RegExp(`^Netflix${PROFILE}`).test(t)) return { service: 'netflix', page: 'browse' };
+  if ((m = t.match(/^Watch (.+?) \| Netflix(?: Official Site)?/))) return { service: 'netflix', page: 'title', title: m[1] };
+  if (/^Netflix [^-|]+ - Watch TV Shows Online/i.test(t)) return { service: 'netflix', page: 'browse' };
+  if (new RegExp(`^YouTube Music${PROFILE}`).test(t)) return { service: 'ytmusic', idle: true };
+  if ((m = t.match(new RegExp(`^(.+) [|-] YouTube Music${PROFILE}`)))) return { service: 'ytmusic', song: true, title: m[1] };
+  if (new RegExp(`^YouTube${PROFILE}`).test(t)) return { service: 'youtube', page: 'home' };
+  if ((m = t.match(new RegExp(`^(.*) - YouTube${PROFILE}`)))) return { service: 'youtube', page: 'other', title: m[1] };
+  if (/^Spotify\s*[-–—]\s*Web Player/i.test(t)) return { service: 'spotify', idle: true };
+  if ((m = t.match(/^(.+?) • (.+?)$/))) return { service: 'spotify', song: true, title: m[1], artist: m[2].replace(new RegExp(PROFILE), '') };
+  if (/ \/ (X|Twitter)(?: - [^-]+)?$/.test(t)) return classifyX(t);
+  return null;
+}
+
+// Is this media session what the window is showing?
+function windowShows(cleanTitle, s) {
+  if (!s.title) return false;
+  return cleanTitle === s.title
+    || cleanTitle.startsWith(`${s.title} - `)
+    || cleanTitle.startsWith(`${s.title} | `)
+    || (s.artist && cleanTitle.startsWith(`${s.title} • ${s.artist}`));
+}
+
+function timelineOf(s, now) {
+  if (s.status !== 'Playing' || !(s.duration > 0)) return null;
+  const rate = s.rate > 0 ? s.rate : 1;
+  const updated = s.updated > 946684800000 && s.updated <= now + 5000 ? s.updated : now;
+  const start = updated - (s.position * 1000) / rate;
+  return { start: Math.round(start), end: Math.round(start + (s.duration * 1000) / rate) };
+}
+
+const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+
+class LocalDetector extends EventEmitter {
+  constructor({ scriptPath, fetcher }) {
+    super();
+    this.scriptPath = scriptPath;
+    this.lookups = new Lookups(fetcher, () => this._rebuild());
+    this.raw = { sessions: [], windows: [] };
+    this.entries = [];
+    this.focus = new Map(); // entry key -> last time it was in the foreground
+    this.firstSeen = new Map(); // thing -> when we first saw it (for "elapsed" timers)
+    this.netflixWatch = new Map(); // browser -> { id, duration } of the Netflix video last seen in its address bar
+    this.mediaSite = new Map(); // "<app>|<title>" -> site, learned while that tab was showing
+    this.lastMusic = new Map(); // browser -> 'spotify' | 'ytmusic', the music site last seen in it
+    this.status = { running: false, error: null, browsers: [] };
+    this.restartDelay = 2000;
+  }
+
+  start() {
+    if (process.platform !== 'win32') {
+      this.status = { ...this.status, error: 'Built-in detection needs Windows' };
+      return;
+    }
+    this.stopped = false;
+    let buf = '';
+    let errText = '';
+    const proc = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.scriptPath], {
+      windowsHide: true,
+    });
+    this.proc = proc;
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line) this._onLine(line);
+      }
+    });
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', (d) => { errText = (errText + d).slice(-2000); });
+    proc.on('error', (err) => { errText = err.message; });
+    proc.on('exit', () => {
+      if (this.proc !== proc) return;
+      this.proc = null;
+      this.raw = { sessions: [], windows: [] };
+      this._setStatus({ running: false, error: this.stopped ? null : (errText.split('\n').find((l) => l.trim()) || 'Detector stopped').trim() });
+      this._rebuild();
+      if (!this.stopped) {
+        setTimeout(() => { if (!this.stopped) this.start(); }, this.restartDelay);
+        this.restartDelay = Math.min(this.restartDelay * 2, 60000);
+      }
+    });
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.proc) this.proc.kill();
+  }
+
+  tabs() {
+    return this.entries;
+  }
+
+  _setStatus(patch) {
+    this.status = { ...this.status, ...patch };
+  }
+
+  _onLine(line) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+    if (msg.type !== 'state') return;
+    this.restartDelay = 2000;
+    this.raw = { sessions: arr(msg.sessions), windows: arr(msg.windows) };
+    this._rebuild();
+  }
+
+  _seen(key, now) {
+    if (!this.firstSeen.has(key)) this.firstSeen.set(key, now);
+    this.seenNow.add(key);
+    return this.firstSeen.get(key);
+  }
+
+  _rebuild() {
+    const now = Date.now();
+    this.seenNow = new Set();
+    const windows = this.raw.windows.map((w) => {
+      const clean = cleanWindowTitle(w.title);
+      return { ...w, browser: PROCESSES[w.process] || w.process, clean, info: classifyTitle(clean) };
+    });
+    this._trackNetflix(windows);
+    for (const w of [...windows].sort((a, b) => a.foreground - b.foreground)) {
+      if (w.info && (w.info.service === 'spotify' || w.info.service === 'ytmusic')) this.lastMusic.set(w.browser, w.info.service);
+    }
+    const entries = [];
+    const shown = new Set(); // window ids already covered by a media entry
+
+    for (const s of this.raw.sessions) {
+      const browser = browserOfApp(s.app);
+      if (!browser || !s.title || !/^(Playing|Paused|Changing)$/.test(s.status)) continue;
+      const win = windows.find((w) => w.browser === browser && windowShows(w.clean, s))
+        || windows.find((w) => windowShows(w.clean, s));
+      const entry = this._fromMedia(s, browser, win, windows, now);
+      if (!entry) continue;
+      if (win) {
+        shown.add(win.id);
+        entry.windowId = win.id;
+      }
+      entries.push(entry);
+    }
+
+    for (const w of windows) {
+      if (!w.info || shown.has(w.id)) continue;
+      // Every Netflix page is titled "Netflix": if Netflix is already playing in this browser, that's the same tab.
+      if (w.info.service === 'netflix' && entries.some((e) => e.service === 'netflix' && e.browser === w.browser)) continue;
+      const entry = this._fromWindow(w, now);
+      if (entry) {
+        entry.windowId = w.id;
+        entries.push(entry);
+      }
+    }
+
+    // Which one is in the foreground right now?
+    for (const e of entries) {
+      const w = windows.find((x) => x.id === e.windowId);
+      if (w && w.foreground) this.focus.set(e.key, now);
+      e.focusedAt = this.focus.get(e.key) || 0;
+      e.updatedAt = now;
+    }
+    for (const k of this.firstSeen.keys()) if (!this.seenNow.has(k)) this.firstSeen.delete(k);
+    if (this.focus.size > 100) this.focus.clear();
+
+    this.entries = entries;
+    const browsers = [...new Set([...windows.map((w) => w.browser), ...this.raw.sessions.map((s) => browserOfApp(s.app)).filter(Boolean)])];
+    this._setStatus({ running: !!this.proc, error: this.proc ? null : this.status.error, browsers });
+    this.emit('change');
+  }
+
+  _fromMedia(s, browser, win, windows, now) {
+    const playing = s.status === 'Playing';
+    const info = win ? win.info : null;
+    const key = (service) => `local:${s.app}:${service}`;
+
+    // Kick either describes the stream (artist = streamer, album = "Kick") or, before
+    // its player is ready, only gives the page title "<name> Live Stream - Watch Live on KICK".
+    const titleInfo = classifyTitle(s.title);
+    if (titleInfo && titleInfo.service === 'kick') return this._kick(titleInfo.channel, browser, key('kick'), playing, now);
+    if ((/^kick$/i.test(s.album) && s.artist) || (info && info.service === 'kick')) {
+      return this._kick(s.artist || info.channel, browser, key('kick'), playing, now, s.artist ? s.title : '');
+    }
+
+    // Netflix: if it doesn't describe what's on, Windows only gets the page title "Netflix".
+    if ((titleInfo && titleInfo.service === 'netflix') || (info && info.service === 'netflix')) {
+      return this._netflix('', '', browser, key('netflix'), s, playing, now);
+    }
+
+    // Which site is playing it? The window showing it says; if that tab is hidden, use
+    // what we learned while it was showing; for songs (they have an album), fall back
+    // to the music site last seen in this browser.
+    const memo = `${s.app}|${s.title}`;
+    let site = info && ['spotify', 'ytmusic', 'youtube'].includes(info.service) ? info.service : null;
+    if (site) {
+      this.mediaSite.set(memo, site);
+      if (this.mediaSite.size > 200) this.mediaSite.delete(this.mediaSite.keys().next().value);
+    } else {
+      site = this.mediaSite.get(memo) || null;
+    }
+    const otherSite = /^(kick|twitch|youtube|soundcloud|deezer|tidal|apple music)$/i.test(s.album);
+    if (!site && s.album && !otherSite) site = this.lastMusic.get(browser) || 'spotify';
+    if (site === 'spotify' || site === 'ytmusic') return this._music(site, s, browser, key(site), playing, now);
+
+    // YouTube: confirmed by a window showing it, or by finding the exact video.
+    const ytWindow = info && info.service === 'youtube';
+    const video = s.artist ? this.lookups.youtube(s.title, s.artist) : null;
+    if (!video && !ytWindow) return null; // not YouTube (or still checking); other sites aren't shown
+    const live = !(s.duration > 0) || !!(video && video.live);
+    return {
+      key: key('youtube'),
+      browser,
+      service: 'youtube',
+      source: 'built-in',
+      data: {
+        page: 'watch',
+        videoId: video ? video.videoId : null,
+        title: s.title,
+        channel: s.artist || '',
+        url: video ? `https://www.youtube.com/watch?v=${video.videoId}` : null,
+        thumbnail: video ? `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg` : null,
+        playing,
+        live,
+        ad: false,
+        timeline: live ? null : timelineOf(s, now),
+        watchStart: this._seen(`yt:${s.title}`, now),
+      },
+    };
+  }
+
+  // Remember which Netflix video each browser is on (read from its address bar while
+  // the Netflix tab is showing), so the show is still known after switching tabs.
+  _trackNetflix(windows) {
+    const isNetflixMedia = (s) => s.title === 'Netflix';
+    const active = new Set(this.raw.sessions.filter(isNetflixMedia).map((s) => browserOfApp(s.app)));
+    for (const w of windows) {
+      if (!w.info || w.info.service !== 'netflix') continue;
+      active.add(w.browser);
+      const url = String(w.url || '');
+      const watch = url.match(/netflix\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?watch\/(\d+)/);
+      const title = url.match(/netflix\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(\d+)/) || url.match(/netflix\.com\/.*[?&]jbv=(\d+)/);
+      if (watch) {
+        const session = this.raw.sessions.find((s) => browserOfApp(s.app) === w.browser && isNetflixMedia(s));
+        const prev = this.netflixWatch.get(w.browser);
+        const duration = session && session.duration > 0 ? session.duration : prev && prev.id === watch[1] ? prev.duration : 0;
+        this.netflixWatch.set(w.browser, { id: watch[1], duration });
+      } else if (title) {
+        w.info = { ...w.info, page: 'title', titleId: title[1] };
+      }
+    }
+    for (const b of [...this.netflixWatch.keys()]) if (!active.has(b)) this.netflixWatch.delete(b);
+  }
+
+  _netflix(title, episode, browser, key, s, playing, now) {
+    // Netflix didn't say what's on: use the video from the address bar.
+    const seen = title ? null : this.netflixWatch.get(browser);
+    const info = seen ? this.lookups.netflix(seen.id) : null;
+    // A different length means another episode started since we last saw the address.
+    const sameVideo = seen && (!seen.duration || !(s.duration > 0) || Math.abs(seen.duration - s.duration) < 2);
+    const name = title || (info && info.title) || '';
+    return {
+      key,
+      browser,
+      service: 'netflix',
+      source: 'built-in',
+      data: {
+        page: 'watch',
+        title: name,
+        episode: title ? episode || '' : info && sameVideo ? info.episode : '',
+        kind: info ? info.kind : '',
+        image: info ? info.image : null,
+        url: info ? `https://www.netflix.com/title/${info.showId || seen.id}` : null,
+        playing,
+        timeline: timelineOf(s, now),
+        watchStart: this._seen(`nf:${name}`, now),
+      },
+    };
+  }
+
+  _music(site, s, browser, key, playing, now) {
+    const query = encodeURIComponent(`${s.title} ${s.artist || ''}`.trim());
+    this._seen(`${site}:${s.title}`, now);
+    let cover = this.lookups.albumArt(s.title, s.artist, s.album) || null;
+    let url = site === 'spotify' ? `https://open.spotify.com/search/${query}` : `https://music.youtube.com/search?q=${query}`;
+    if (site === 'ytmusic') {
+      // Every YouTube Music track is a YouTube video: its thumbnail is the fallback cover,
+      // and it gives a direct link.
+      const video = this.lookups.youtube(s.title, '');
+      if (video) {
+        url = `https://music.youtube.com/watch?v=${video.videoId}`;
+        if (!cover) cover = `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`;
+      }
+    }
+    return {
+      key,
+      browser,
+      service: site,
+      source: 'built-in',
+      data: {
+        title: s.title,
+        artists: s.artist ? [s.artist] : [],
+        album: s.album || '',
+        cover,
+        url,
+        playing,
+        timeline: timelineOf(s, now),
+      },
+    };
+  }
+
+  _kick(name, browser, key, playing, now, streamTitle = '') {
+    const ch = this.lookups.kick(name);
+    const slug = (ch && ch.slug) || name.toLowerCase();
+    return {
+      key,
+      browser,
+      service: 'kick',
+      source: 'built-in',
+      data: {
+        page: 'stream',
+        slug,
+        channel: (ch && ch.channel) || name,
+        avatar: (ch && ch.avatar) || null,
+        live: ch ? ch.live : true,
+        title: (ch && ch.title) || streamTitle,
+        category: (ch && ch.category) || '',
+        liveSince: (ch && ch.liveSince) || null,
+        playing,
+        url: `https://kick.com/${slug}`,
+        watchStart: this._seen(`kick:${name}`, now),
+      },
+    };
+  }
+
+  _fromWindow(w, now) {
+    const info = w.info;
+    const key = `local:win:${w.id}:${info.service}`;
+    const base = { key, browser: w.browser, service: info.service, source: 'built-in' };
+    const sessionStart = this._seen(`${key}:session`, now);
+    switch (info.service) {
+      case 'x':
+        return { ...base, data: { ...info.data, sessionStart } };
+      case 'youtube':
+        return { ...base, data: { page: info.page === 'home' ? 'home' : 'browse', sessionStart } };
+      case 'netflix': {
+        const t = info.titleId ? this.lookups.netflix(info.titleId) : null;
+        return { ...base, data: { page: info.page, title: info.title || (t && t.title) || '', sessionStart } };
+      }
+      case 'spotify':
+        // "Song • Artist" titles are only trusted together with a media session
+        // (other sites use "•" too), so on its own only the idle player counts.
+        return info.song ? null : { ...base, data: { idle: true, sessionStart } };
+      case 'ytmusic':
+        // Without a media session we can't tell playing from paused, so it only counts as "open".
+        return { ...base, data: { idle: true, sessionStart } };
+      case 'kick':
+        return { ...this._kick(info.channel, w.browser, key, false, now) };
+      default:
+        return null;
+    }
+  }
+}
+
+module.exports = { LocalDetector, classifyTitle, cleanWindowTitle, browserOfApp };

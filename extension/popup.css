@@ -1,0 +1,28 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  width: 320px;
+  margin: 0;
+  padding: 14px;
+  background: #0e1117;
+  color: #eceef3;
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+header img { width: 36px; height: 36px; border-radius: 9px; }
+.name { font-weight: 700; font-size: 14px; }
+.status { display: flex; align-items: center; gap: 7px; color: #b6bccb; font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #7e8698; }
+.dot.good { background: #3ddc97; }
+.dot.bad { background: #ff5d6c; }
+.label { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #7e8698; margin: 12px 0 8px; }
+.now { padding: 10px 12px; border-radius: 10px; background: linear-gradient(160deg, rgba(88, 101, 242, 0.18), rgba(168, 85, 247, 0.06)); border: 1px solid rgba(123, 109, 255, 0.3); }
+.now .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now .s { color: #b6bccb; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabs { display: flex; flex-direction: column; gap: 6px; }
+.tab { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); }
+.tab img { width: 22px; height: 22px; border-radius: 6px; flex: none; }
+.tab .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.empty { color: #7e8698; padding: 8px 2px; }
+footer { margin-top: 12px; color: #7e8698; font-size: 12px; }
+footer:empty { display: none; }

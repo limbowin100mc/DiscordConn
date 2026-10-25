@@ -1,0 +1,78 @@
+{
+  "name": "presence-hub",
+  "productName": "Presence Hub",
+  "version": "1.5.0",
+  "description": "Show what you watch and listen to in your browser as your Discord activity.",
+  "main": "src/main/main.js",
+  "private": true,
+  "author": "sxset",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.presencehub.app",
+    "productName": "Presence Hub",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "!assets/discord-icons/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      },
+      {
+        "from": "assets/discord-icons",
+        "to": "discord-icons"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Presence Hub",
+      "artifactName": "Presence-Hub-Setup-${version}.${ext}"
+    },
+    "asarUnpack": [
+      "src/main/watcher/*.ps1"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "limbowin100mc",
+        "repo": "DiscordConn",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/limbowin100mc/DiscordConn.git"
+  }
+}
