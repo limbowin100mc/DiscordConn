@@ -50,8 +50,9 @@ public static class PresenceHubWin {
 }
 '@
 
-# Netflix titles every page just "Netflix", so for windows showing a Netflix tab we
-# read the address bar (netflix.com/watch/<id>) to know what's on. Nothing else is read.
+# For windows showing a YouTube, YouTube Music or Netflix tab we read the address bar
+# (the video id), so what's playing is still known after you switch tabs or to a game.
+# Netflix needs it most: it titles every page just "Netflix". Other sites aren't read.
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $UIA = [System.Windows.Automation.AutomationElement]
@@ -59,7 +60,7 @@ $addressBar = New-Object System.Windows.Automation.OrCondition(
   (New-Object System.Windows.Automation.PropertyCondition($UIA::ClassNameProperty, 'OmniboxViewViews')),  # Chrome, Edge, Brave, Opera
   (New-Object System.Windows.Automation.PropertyCondition($UIA::AutomationIdProperty, 'urlbar-input')))     # Firefox
 $addressCache = @{}
-function NetflixAddress([string]$hwnd) {
+function SiteAddress([string]$hwnd) {
   $now = [DateTime]::UtcNow
   $c = $addressCache[$hwnd]
   if ($c -and ($now - $c.at).TotalSeconds -lt 4) { return $c.url }
@@ -69,7 +70,7 @@ function NetflixAddress([string]$hwnd) {
     if (-not $el) { $el = $UIA::FromHandle([IntPtr][long]$hwnd).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $addressBar) }
     if ($el) { $url = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value }
   } catch { $el = $null }
-  if ($url -notmatch 'netflix\.com/') { $url = '' }
+  if ($url -notmatch '(^|[/.])(youtube\.com|netflix\.com)/') { $url = '' }
   $addressCache[$hwnd] = @{ element = $el; url = $url; at = $now }
   return $url
 }
@@ -132,7 +133,7 @@ while ($true) {
       $name = ProcessName ([int]$w[2])
       if ($name -match $BrowserProcesses) {
         $entry = [ordered]@{ id = $w[0]; title = $w[1]; process = $name; foreground = ($w[3] -eq '1') }
-        if ($w[1] -match '^Netflix(\s|$)') { $entry.url = NetflixAddress $w[0]; $seenWindows[$w[0]] = $true }
+        if ($w[1] -match '^Netflix(\s|$)| - YouTube( |$)| \| YouTube Music( |$)') { $entry.url = SiteAddress $w[0]; $seenWindows[$w[0]] = $true }
         $windows += $entry
       }
     }

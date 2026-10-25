@@ -40,7 +40,7 @@ class Lookups {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
         body: JSON.stringify({
-          context: { client: { clientName: 'WEB', clientVersion: '2.20251020.00.00', hl: 'en', gl: 'US' } },
+          context: { client: { clientName: 'WEB', clientVersion: '2.20251020.00.00', hl: 'en' } }, // region: from your connection
           query: channel ? `${title} ${channel}` : title,
         }),
       });
@@ -63,9 +63,12 @@ class Lookups {
       })(json, 0);
       const t = norm(title);
       const c = norm(channel);
-      return videos.find((v) => norm(v.title) === t && (!c || norm(v.channel) === c))
-        || (c ? null : videos.find((v) => norm(v.title) === t))
-        || null;
+      // Channel names can differ a little ("Queen" vs "Queen Official", "X - Topic").
+      const sameChannel = (v) => {
+        const vc = norm(v.channel);
+        return !c || (!!vc && (vc === c || vc.includes(c) || c.includes(vc)));
+      };
+      return videos.find((v) => norm(v.title) === t && sameChannel(v)) || null;
     });
   }
 

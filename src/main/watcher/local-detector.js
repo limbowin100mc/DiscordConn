@@ -93,6 +93,12 @@ function windowShows(cleanTitle, s) {
     || (s.artist && cleanTitle.startsWith(`${s.title} • ${s.artist}`));
 }
 
+// "youtube.com/watch?v=ID", "music.youtube.com/watch?v=ID&list=..", "youtube.com/shorts/ID", "/live/ID"
+function videoIdFrom(url) {
+  const m = String(url || '').match(/youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+
 function timelineOf(s, now) {
   if (s.status !== 'Playing' || !(s.duration > 0)) return null;
   const rate = s.rate > 0 ? s.rate : 1;
@@ -104,9 +110,10 @@ function timelineOf(s, now) {
 const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 
 class LocalDetector extends EventEmitter {
-  constructor({ scriptPath, fetcher }) {
+  constructor({ scriptPath, fetcher, memoryFile = null }) {
     super();
     this.scriptPath = scriptPath;
+    this.memoryFile = memoryFile; // remembers the music site last used per browser across restarts
     this.lookups = new Lookups(fetcher, () => this._rebuild());
     this.raw = { sessions: [], windows: [] };
     this.entries = [];
@@ -114,9 +121,26 @@ class LocalDetector extends EventEmitter {
     this.firstSeen = new Map(); // thing -> when we first saw it (for "elapsed" timers)
     this.netflixWatch = new Map(); // browser -> { id, duration } of the Netflix video last seen in its address bar
     this.mediaSite = new Map(); // "<app>|<title>" -> site, learned while that tab was showing
+    this.mediaVideo = new Map(); // "<app>|<title>" -> YouTube video id, read from the address bar while showing
     this.lastMusic = new Map(); // browser -> 'spotify' | 'ytmusic', the music site last seen in it
+    this._loadMemory();
     this.status = { running: false, error: null, browsers: [] };
     this.restartDelay = 2000;
+  }
+
+  _loadMemory() {
+    if (!this.memoryFile) return;
+    try {
+      const saved = JSON.parse(require('fs').readFileSync(this.memoryFile, 'utf8'));
+      for (const [b, site] of Object.entries(saved.lastMusic || {})) if (site === 'spotify' || site === 'ytmusic') this.lastMusic.set(b, site);
+    } catch { /* first run */ }
+  }
+
+  _saveMemory() {
+    if (!this.memoryFile) return;
+    try {
+      require('fs').writeFileSync(this.memoryFile, JSON.stringify({ lastMusic: Object.fromEntries(this.lastMusic) }));
+    } catch { /* not important */ }
   }
 
   start() {
@@ -193,9 +217,11 @@ class LocalDetector extends EventEmitter {
       return { ...w, browser: PROCESSES[w.process] || w.process, clean, info: classifyTitle(clean) };
     });
     this._trackNetflix(windows);
+    const before = JSON.stringify([...this.lastMusic]);
     for (const w of [...windows].sort((a, b) => a.foreground - b.foreground)) {
       if (w.info && (w.info.service === 'spotify' || w.info.service === 'ytmusic')) this.lastMusic.set(w.browser, w.info.service);
     }
+    if (JSON.stringify([...this.lastMusic]) !== before) this._saveMemory();
     const entries = [];
     const shown = new Set(); // window ids already covered by a media entry
 
@@ -230,6 +256,7 @@ class LocalDetector extends EventEmitter {
       if (w && w.foreground) this.focus.set(e.key, now);
       e.focusedAt = this.focus.get(e.key) || 0;
       e.updatedAt = now;
+      for (const alt of e.alternatives || []) Object.assign(alt, { focusedAt: e.focusedAt, updatedAt: now, windowId: e.windowId });
     }
     for (const k of this.firstSeen.keys()) if (!this.seenNow.has(k)) this.firstSeen.delete(k);
     if (this.focus.size > 100) this.focus.clear();
@@ -269,16 +296,48 @@ class LocalDetector extends EventEmitter {
     } else {
       site = this.mediaSite.get(memo) || null;
     }
+    // YouTube Music titles its tab just "YouTube Music" except on the song's own page, so
+    // a track (with an artist) playing while such a tab is showing in this browser is from it.
+    if (!site && s.artist && windows.some((w) => w.browser === browser && w.info && w.info.service === 'ytmusic')
+      && !windows.some((w) => w.browser === browser && w.info && w.info.service === 'youtube')) {
+      site = 'ytmusic';
+      this.mediaSite.set(memo, site);
+    }
+    const shownId = win && videoIdFrom(win.url);
+    if (shownId) {
+      this.mediaVideo.set(memo, shownId);
+      if (this.mediaVideo.size > 200) this.mediaVideo.delete(this.mediaVideo.keys().next().value);
+    }
     const otherSite = /^(kick|twitch|youtube|soundcloud|deezer|tidal|apple music)$/i.test(s.album);
-    if (!site && s.album && !otherSite) site = this.lastMusic.get(browser) || 'spotify';
-    if (site === 'spotify' || site === 'ytmusic') return this._music(site, s, browser, key(site), playing, now);
+    if (site === 'spotify' || site === 'ytmusic') return this._music(site, s, browser, key(site), playing, now, this.mediaVideo.get(memo));
+    if (!site && s.album && !otherSite) {
+      // A song, but its tab isn't showing: most likely the music site last seen in this
+      // browser. The other one is offered too; the app uses one you have turned on.
+      const guess = this.lastMusic.get(browser) || 'spotify';
+      const other = guess === 'spotify' ? 'ytmusic' : 'spotify';
+      const entry = this._music(guess, s, browser, key(guess), playing, now);
+      entry.alternatives = [this._music(other, s, browser, key(other), playing, now)];
+      return entry;
+    }
 
-    // YouTube: confirmed by a window showing it, or by finding the exact video.
-    const ytWindow = info && info.service === 'youtube';
-    const video = s.artist ? this.lookups.youtube(s.title, s.artist) : null;
-    if (!video && !ytWindow) return null; // not YouTube (or still checking); other sites aren't shown
+    // YouTube: known from its tab (now or earlier, with the video id from the address
+    // bar), or confirmed by finding the exact video on YouTube.
+    const knownId = this.mediaVideo.get(memo);
+    const video = knownId ? { videoId: knownId, live: false } : s.artist ? this.lookups.youtube(s.title, s.artist) : null;
+    if (!video && site !== 'youtube') {
+      if (video === null && s.artist && s.duration > 0 && this.lastMusic.get(browser) === 'ytmusic') {
+        return this._music('ytmusic', s, browser, key('ytmusic'), playing, now);
+      }
+      return null; // not YouTube (or still checking); other sites aren't shown
+    }
     const live = !(s.duration > 0) || !!(video && video.live);
+    // Every YouTube Music track is also a YouTube video. Unless we saw it on YouTube
+    // itself, it may be YouTube Music (playing from its home or library page).
+    const alternatives = site !== 'youtube' && this.lastMusic.get(browser) === 'ytmusic'
+      ? [this._music('ytmusic', s, browser, key('ytmusic'), playing, now, video && video.videoId)]
+      : undefined;
     return {
+      alternatives,
       key: key('youtube'),
       browser,
       service: 'youtube',
@@ -348,7 +407,7 @@ class LocalDetector extends EventEmitter {
     };
   }
 
-  _music(site, s, browser, key, playing, now) {
+  _music(site, s, browser, key, playing, now, knownId = null) {
     const query = encodeURIComponent(`${s.title} ${s.artist || ''}`.trim());
     this._seen(`${site}:${s.title}`, now);
     let cover = this.lookups.albumArt(s.title, s.artist, s.album) || null;
@@ -356,7 +415,7 @@ class LocalDetector extends EventEmitter {
     if (site === 'ytmusic') {
       // Every YouTube Music track is a YouTube video: its thumbnail is the fallback cover,
       // and it gives a direct link.
-      const video = this.lookups.youtube(s.title, '');
+      const video = knownId ? { videoId: knownId } : this.lookups.youtube(s.title, '');
       if (video) {
         url = `https://music.youtube.com/watch?v=${video.videoId}`;
         if (!cover) cover = `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`;

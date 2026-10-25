@@ -48,6 +48,7 @@ function start() {
     // PowerShell can't read files inside app.asar, so the script ships unpacked.
     scriptPath: path.join(__dirname, 'watcher', 'media-watcher.ps1').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
     fetcher: (url, opts) => net.fetch(url, opts),
+    memoryFile: path.join(app.getPath('userData'), 'detector-memory.json'),
   });
   presence = new PresenceManager();
   updater = new Updater();

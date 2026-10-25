@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Presence Hub Connector",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Lets the Presence Hub desktop app show the video, stream or song you have open as your Discord activity.",
   "minimum_chrome_version": "116",
   "icons": {

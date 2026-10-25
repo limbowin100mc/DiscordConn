@@ -57,7 +57,10 @@ class Engine extends EventEmitter {
     const s = this.store.get();
     const sources = [];
 
-    for (const tab of this.allTabs()) {
+    for (const found of this.allTabs()) {
+      // Built-in detection may offer other likely sites; use the first one that's turned on.
+      const tab = [found, ...(found.alternatives || [])]
+        .find((t) => s.services[t.service] && s.services[t.service].enabled) || found;
       const svc = registry.get(tab.service);
       if (!svc || !tab.data || typeof tab.data !== 'object') continue;
       const conf = s.services[svc.id];

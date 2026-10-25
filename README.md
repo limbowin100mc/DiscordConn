@@ -39,6 +39,8 @@ If several things are open, it shows, in this order:
 ### Built-in detection: good to know
 - Windows only knows about tabs that play media, one per browser at a time (the latest one). Sites without media, like X, are seen when they're the tab showing in a browser window. Minimized windows count.
 - Spotify is recognised by its album info, so a song from another music site may show up as Spotify too.
+- While a YouTube, YouTube Music or Netflix tab is showing, the app reads that window's address bar (only for those sites) to remember exactly what's playing. It keeps showing after you switch to another tab, minimize the browser, or play a game.
+- YouTube Music titles its tab just "YouTube Music" except on a song's own page. A track playing while that tab is showing, or in a browser where YouTube Music was the last music site you used, counts as YouTube Music.
 - Netflix titles every page just "Netflix" and doesn't tell Windows what's on. So while a Netflix tab is showing, the app reads that window's address bar (only for Netflix) to get the video number, and looks the show and episode up on Netflix's public title page. It keeps the show after you switch tabs. If another episode starts while the tab is hidden, the episode is updated once the tab is shown again.
 - Media in private/incognito windows is visible to Windows as well. Pause sharing (tray icon or the switch) if you don't want that shown.
 
@@ -68,6 +70,7 @@ Every push to `main` also builds the installer; it's attached to the workflow ru
 ## Troubleshooting
 - **Nothing on Discord:** check that the Discord *desktop* app is running and Activity Privacy sharing is on.
 - **Buttons not visible:** Discord hides activity buttons on *your own* profile. Friends can see them.
+- **Playing a game:** Discord's member list shows only one activity, usually the game. Your browser activity is still on your profile: click your name to see all activities.
 - **Spotify shows twice:** if Spotify is linked under Discord *Connections*, Discord may already show it. Turn one of them off.
 
 ## Adding a new site later
