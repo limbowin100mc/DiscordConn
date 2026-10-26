@@ -191,6 +191,7 @@ class LocalDetector extends EventEmitter {
       if (this.proc !== proc) return;
       this.proc = null;
       this.raw = { sessions: [], windows: [] };
+      this.game = null;
       this._setStatus({ running: false, error: this.stopped ? null : (errText.split('\n').find((l) => l.trim()) || 'Detector stopped').trim() });
       this._rebuild();
       if (!this.stopped) {
@@ -203,6 +204,17 @@ class LocalDetector extends EventEmitter {
   stop() {
     this.stopped = true;
     if (this.proc) this.proc.kill();
+  }
+
+  // Play/pause/next/previous for a media session (the mini player's buttons).
+  control(app, cmd) {
+    if (!this.proc || !['toggle', 'next', 'prev'].includes(cmd)) return false;
+    // A built-in entry's key carries the media app id; otherwise use the one that's playing.
+    const playing = this.raw.sessions.find((s) => s.status === 'Playing' && browserOfApp(s.app));
+    const target = app || (playing && playing.app) || '';
+    this.proc.stdin.write(`${JSON.stringify({ cmd, app: target })}
+`);
+    return true;
   }
 
   tabs() {
@@ -219,6 +231,7 @@ class LocalDetector extends EventEmitter {
     if (msg.type !== 'state') return;
     this.restartDelay = 2000;
     this.raw = { sessions: arr(msg.sessions), windows: arr(msg.windows) };
+    this.game = msg.game && msg.game.name ? { name: String(msg.game.name), foreground: !!msg.game.foreground } : null;
     this._rebuild();
   }
 

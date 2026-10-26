@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld('hub', {
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  getStats: (range) => ipcRenderer.invoke('stats:get', range),
+  resetStats: () => ipcRenderer.invoke('stats:reset'),
+  mediaControl: (cmd) => ipcRenderer.invoke('media:control', cmd),
+  hideMini: () => ipcRenderer.invoke('mini:hide'),
+  shareNow: () => ipcRenderer.invoke('share:now'),
 });

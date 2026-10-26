@@ -10,6 +10,10 @@ const { PresenceManager, testClientId } = require('./presence-manager');
 const { Engine } = require('./engine');
 const { AppIcons } = require('./app-icons');
 const { Updater } = require('./updater');
+const { Lyrics } = require('./lyrics');
+const { Stats } = require('./stats');
+const { MiniPlayer } = require('./mini-player');
+const { shareNowPlaying } = require('./share-card');
 const registry = require('./services');
 
 const PORT = 47823;
@@ -17,6 +21,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const ASSETS = path.join(ROOT, 'assets');
 const EXTENSION_DIR = app.isPackaged ? path.join(process.resourcesPath, 'extension') : path.join(ROOT, 'extension');
 const ICONS_DIR = app.isPackaged ? path.join(process.resourcesPath, 'discord-icons') : path.join(ASSETS, 'discord-icons');
+const RENDERER = path.join(__dirname, '..', 'renderer');
 const VERBS = { 0: 'Playing', 2: 'Listening to', 3: 'Watching', 5: 'Competing in' };
 
 let win = null;
@@ -26,6 +31,8 @@ let bridge;
 let detector;
 let presence;
 let updater;
+let stats;
+let miniPlayer;
 let engine;
 let quitting = false;
 let cleanedUp = false;
@@ -53,6 +60,8 @@ function start() {
   presence = new PresenceManager();
   updater = new Updater();
   const appIcons = new AppIcons((url, opts) => net.fetch(url, opts), () => engine && engine.schedule());
+  const lyrics = new Lyrics((url, opts) => net.fetch(url, opts), () => engine && engine.schedule());
+  stats = new Stats(app.getPath('userData'));
   engine = new Engine({
     store,
     bridge,
@@ -60,6 +69,8 @@ function start() {
     presence,
     appIcons,
     updater,
+    lyrics,
+    stats,
     info: {
       version: app.getVersion(),
       packaged: app.isPackaged,
@@ -67,8 +78,15 @@ function start() {
     },
   });
 
+  miniPlayer = new MiniPlayer({
+    store,
+    preload: path.join(__dirname, 'preload.js'),
+    page: path.join(RENDERER, 'mini.html'),
+    icon: path.join(ASSETS, 'icon.png'),
+  });
   engine.on('state', (state) => {
     if (win && !win.isDestroyed()) win.webContents.send('state', state);
+    miniPlayer.update(state);
     updateTray();
   });
 
@@ -99,6 +117,8 @@ function start() {
 
 async function cleanup() {
   store.flush();
+  stats.flush();
+  miniPlayer.destroy();
   bridge.stop();
   detector.stop();
   await Promise.race([presence.destroy(), new Promise((r) => setTimeout(r, 1500))]);
@@ -124,7 +144,7 @@ function createWindow(show) {
       spellcheck: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.loadFile(path.join(RENDERER, 'index.html'));
   win.once('ready-to-show', () => { if (show) win.show(); });
   win.webContents.setWindowOpenHandler(({ url }) => {
     openExternal(url);
@@ -137,7 +157,11 @@ function createWindow(show) {
       win.hide();
     }
   });
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => {
+    win = null;
+    // The mini player is a window too, so "all windows closed" may never fire: quit here.
+    if (!store.get().closeToTray && !quitting) app.quit();
+  });
 }
 
 function showWindow() {
@@ -170,7 +194,7 @@ function updateTray() {
   const svc = cur && registry.get(cur.service);
   const verb = svc && VERBS[cur.activity.type];
   const showing = svc ? `${verb ? `${verb} ` : ''}${svc.name}${cur.activity.details ? ` — ${cur.activity.details}` : ''}` : null;
-  const key = JSON.stringify([s.enabled, showing]);
+  const key = JSON.stringify([s.enabled, s.miniPlayer, showing]);
   if (key === trayKey) return;
   trayKey = key;
 
@@ -182,6 +206,7 @@ function updateTray() {
     { type: 'separator' },
     { label: showing ? (showing.length > 60 ? `${showing.slice(0, 57)}...` : showing) : 'Nothing shown right now', enabled: false },
     { label: 'Show my activity on Discord', type: 'checkbox', checked: s.enabled, click: (item) => store.set({ enabled: item.checked }) },
+    { label: 'Mini player', type: 'checkbox', checked: s.miniPlayer, click: (item) => store.set({ miniPlayer: item.checked }) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
@@ -228,4 +253,35 @@ function registerIpc() {
   ipcMain.handle('app:open-external', (_e, url) => openExternal(url));
   ipcMain.handle('app:open-folder', (_e, which) => shell.openPath(which === 'icons' ? ICONS_DIR : EXTENSION_DIR));
   ipcMain.handle('app:copy', (_e, text) => clipboard.writeText(String(text)));
+
+  ipcMain.handle('stats:get', (_e, range) => {
+    const days = { today: 1, week: 7, month: 30, all: Infinity }[range] || 7;
+    return engine.statsSummary(days);
+  });
+  ipcMain.handle('stats:reset', () => { stats.reset(); return true; });
+  ipcMain.handle('media:control', (_e, cmd) => engine.control(String(cmd)));
+  ipcMain.handle('mini:hide', () => store.set({ miniPlayer: false }));
+  ipcMain.handle('share:now', () => {
+    const cur = engine.current;
+    if (!cur) return { ok: false, error: 'Nothing is playing' };
+    const svc = registry.get(cur.service);
+    const a = cur.activity;
+    const assets = a.assets || {};
+    const remote = (v) => (typeof v === 'string' && /^https:\/\//.test(v) ? v : null);
+    return shareNowPlaying({
+      page: path.join(RENDERER, 'share.html'),
+      card: {
+        verb: VERBS[a.type] || 'Playing',
+        service: svc.name,
+        color: svc.color,
+        logo: svc.logo,
+        image: remote(assets.large_image),
+        title: a.details || svc.name,
+        subtitle: cur.lyrics ? (assets.large_text || '') : a.state || '',
+        start: a.timestamps && a.timestamps.start,
+        end: a.timestamps && a.timestamps.end,
+        user: presence.status.user ? presence.status.user.global_name || presence.status.user.username : null,
+      },
+    });
+  });
 }

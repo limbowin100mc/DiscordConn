@@ -1,7 +1,7 @@
 {
   "name": "presence-hub",
   "productName": "Presence Hub",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Show what you watch and listen to in your browser as your Discord activity.",
   "main": "src/main/main.js",
   "private": true,

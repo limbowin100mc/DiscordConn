@@ -58,6 +58,8 @@ function toast(text) {
 const svg = (body, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${body}</svg>`;
 const ICONS = {
   dashboard: svg('<rect width="7" height="9" x="3" y="3" rx="1.5"/><rect width="7" height="5" x="14" y="3" rx="1.5"/><rect width="7" height="9" x="14" y="12" rx="1.5"/><rect width="7" height="5" x="3" y="16" rx="1.5"/>'),
+  stats: svg('<path d="M3 3v18h18"/><rect width="4" height="7" x="7" y="10" rx="1"/><rect width="4" height="12" x="13" y="5" rx="1"/>'),
+  share: svg('<path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>'),
   services: svg('<rect width="8" height="8" x="3" y="3" rx="2"/><rect width="8" height="8" x="13" y="3" rx="2"/><rect width="8" height="8" x="3" y="13" rx="2"/><path d="M17 13v8M13 17h8"/>'),
   settings: svg('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
   setup: svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'),
@@ -195,7 +197,8 @@ function render() {
   if (!state) return;
   renderTitlebar();
   renderSidebar();
-  const pages = { dashboard: pageDashboard, services: pageServices, settings: pageSettings, setup: pageSetup };
+  const pages = { dashboard: pageDashboard, stats: pageStats, services: pageServices, settings: pageSettings, setup: pageSetup };
+  if (page === 'stats') loadStats();
   const content = document.getElementById('content');
   const html = `<div class="page" data-page="${page}">${(pages[page] || pageDashboard)()}</div>`;
   if (content.firstElementChild && content.firstElementChild.dataset.page !== page) {
@@ -221,6 +224,7 @@ function renderSidebar() {
   const prog = setupProgress();
   const nav = [
     ['dashboard', 'Dashboard'],
+    ['stats', 'Stats'],
     ['services', 'Services'],
     ['settings', 'Settings', ['available', 'downloaded'].includes(state.update.status) ? 1 : 0],
     ['setup', 'Setup guide', prog.todo],
@@ -427,6 +431,11 @@ function pageDashboard() {
         <div class="preview-inner">
           <div class="preview-label">${label}</div>
           ${previewCard()}
+          ${cur && s.enabled ? `<div class="preview-extras">
+            ${state.current.lyrics ? '<span class="chip">🎤 Live lyrics</span>' : ''}
+            ${state.game && s.gameCombo ? `<span class="chip">🎮 ${esc(state.game.name)}</span>` : ''}
+            <button class="btn sm" data-action="share-now" title="Copy an image of what's playing, then paste it in Discord">${ICONS.share}Share now playing</button>
+          </div>` : ''}
         </div>
       </section>
       <div class="status-col">
@@ -585,6 +594,184 @@ function pageServices() {
     </div>`;
 }
 
+/* ---------- stats ---------- */
+
+let statsRange = load('statsRange') || 'week';
+let statsData = null;
+let statsAt = 0;
+let statsLoading = false;
+let statsTable = false;
+let resetArmed = false;
+
+async function loadStats(force = false) {
+  if (statsLoading) return;
+  if (!force && statsData && statsData.range === statsRange && Date.now() - statsAt < 15000) return;
+  statsLoading = true;
+  try {
+    const d = await api.getStats(statsRange);
+    statsData = d ? { ...d, range: statsRange } : null;
+    statsAt = Date.now();
+  } finally {
+    statsLoading = false;
+  }
+  if (page === 'stats') render();
+}
+
+function fmtDur(secs) {
+  secs = Math.round(secs || 0);
+  if (secs < 60) return secs ? '<1m' : '0m';
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+const dayLabel = (iso, short) => {
+  const d = new Date(`${iso}T12:00:00`);
+  return short ? d.toLocaleDateString([], { weekday: 'short' }) : d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+};
+
+// A path for a bar with a rounded top (the data end) and a square base.
+function topRounded(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+// Daily listening/watching, stacked. One bar per day, hover for the numbers.
+function dailyChart(perDay) {
+  const W = 1000;
+  const H = 230;
+  const L = 52;
+  const R = 8;
+  const T = 10;
+  const B = 28;
+  const plotH = H - T - B;
+  const max = Math.max(60, ...perDay.map((d) => d.listen + d.watch));
+  const steps = [300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 43200];
+  const step = steps.find((x) => max / x <= 4) || 86400;
+  const top = Math.ceil(max / step) * step;
+  const y = (v) => T + plotH * (1 - v / top);
+  const band = (W - L - R) / perDay.length;
+  const bw = Math.min(24, band * 0.62);
+  const GAP = 2;
+  let grid = '';
+  for (let v = 0; v <= top; v += step) {
+    grid += `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid"/>`;
+    grid += `<text x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" class="ylab">${v ? fmtDur(v) : '0'}</text>`;
+  }
+  const short = perDay.length <= 7;
+  let bars = '';
+  perDay.forEach((d, i) => {
+    const x = L + i * band + (band - bw) / 2;
+    const base = y(0);
+    const hl = (d.listen / top) * plotH;
+    const hw = (d.watch / top) * plotH;
+    const tip = `${dayLabel(d.date, false)}|${fmtDur(d.listen)}|${fmtDur(d.watch)}`;
+    if (hl > 0.5) {
+      bars += hw > 0.5
+        ? `<rect x="${x.toFixed(1)}" y="${(base - hl).toFixed(1)}" width="${bw.toFixed(1)}" height="${hl.toFixed(1)}" class="s-listen"/>`
+        : `<path d="${topRounded(x, base - hl, bw, hl, 4)}" class="s-listen"/>`;
+    }
+    if (hw > 0.5) {
+      const top2 = base - hl - (hl > 0.5 ? GAP : 0) - hw;
+      bars += `<path d="${topRounded(x, top2, bw, hw, 4)}" class="s-watch"/>`;
+    }
+    const showLabel = short || i % 5 === 0 || i === perDay.length - 1;
+    if (showLabel) bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" class="xlab">${dayLabel(d.date, short)}</text>`;
+    bars += `<rect x="${(L + i * band).toFixed(1)}" y="${T}" width="${band.toFixed(1)}" height="${plotH}" class="hit" data-tip="${esc(tip)}"/>`;
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Listening and watching time per day">${grid}${bars}</svg>`;
+}
+
+function rankList(title, items, empty) {
+  if (!items || !items.length) return '';
+  const max = items[0].secs || 1;
+  return `<section class="card top-card">
+    <div class="card-head"><h2>${title}</h2></div>
+    <ol class="top-list">
+      ${items.map((it, i) => {
+        const svc = svcById(it.service);
+        return `<li class="top-item">
+          <span class="rank">${i + 1}</span>
+          ${svc ? `<img src="${esc(svc.logo)}" alt="" class="top-logo">` : ''}
+          <div class="top-text"><div class="top-title">${esc(it.title || empty)}</div>${it.sub ? `<div class="top-sub">${esc(it.sub)}</div>` : ''}</div>
+          <div class="top-meter"><i style="width:${Math.max(4, (it.secs / max) * 100).toFixed(0)}%"></i></div>
+          <span class="top-time">${fmtDur(it.secs)}</span>
+        </li>`;
+      }).join('')}
+    </ol>
+  </section>`;
+}
+
+function pageStats() {
+  const ranges = [['today', 'Today'], ['week', '7 days'], ['month', '30 days'], ['all', 'All time']];
+  const head = `
+    <div class="page-head stats-head">
+      <div><h1>Stats</h1><p class="sub">Your listening and watching time. Only stored on this PC.</p></div>
+      <div class="segmented">${ranges.map(([v, l]) => `<button class="${statsRange === v ? 'active' : ''}" data-action="stats-range" data-value="${v}">${l}</button>`).join('')}</div>
+    </div>`;
+  const d = statsData && statsData.range === statsRange ? statsData : null;
+  if (!d) return `${head}<div class="card empty-list">Loading…</div>`;
+  if (!d.listen && !d.watch) {
+    return `${head}<section class="card preview-empty" style="min-height:260px">
+      <h3>Nothing yet</h3>
+      <p>${state.settings.statsEnabled ? 'Play some music or a show; your time adds up here.' : 'Stats are turned off. Turn on “Keep stats” in Settings → Extras.'}</p>
+    </section>`;
+  }
+  const topSvc = d.byService[0] && svcById(d.byService[0].service);
+  const tile = (label, value, sub, swatch = '') => `<div class="card stat-tile">
+    <div class="stat-label">${swatch}${label}</div><div class="stat-value">${value}</div><div class="stat-sub">${sub}</div></div>`;
+  const maxSvc = d.byService[0] ? d.byService[0].secs : 1;
+  return `${head}
+    <div class="stat-tiles">
+      ${tile('Listening', fmtDur(d.listen), d.topArtists[0] ? `Top artist: ${esc(d.topArtists[0].title)}` : 'Music', '<i class="sw s-listen"></i>')}
+      ${tile('Watching', fmtDur(d.watch), d.topWatched[0] ? `Most watched: ${esc(d.topWatched[0].title)}` : 'Videos, shows and streams', '<i class="sw s-watch"></i>')}
+      ${tile('Top service', topSvc ? esc(topSvc.name) : '—', topSvc ? fmtDur(d.byService[0].secs) : '')}
+      ${tile(statsRange === 'today' ? 'Songs played' : 'Days active', statsRange === 'today' ? String(d.topSongs.reduce((n, x) => n + x.plays, 0)) : String(d.daysActive), statsRange === 'today' ? 'today' : `of the last ${d.perDay.length} days`)}
+    </div>
+    ${statsRange !== 'today' ? `<section class="card">
+      <div class="card-head">
+        <h2>Per day</h2>
+        <div class="legend"><span><i class="sw s-listen"></i>Listening</span><span><i class="sw s-watch"></i>Watching</span>
+          <button class="btn sm ghost" data-action="stats-table">${statsTable ? 'Show chart' : 'Show as table'}</button></div>
+      </div>
+      ${statsTable ? `<table class="stat-table"><thead><tr><th>Day</th><th>Listening</th><th>Watching</th></tr></thead><tbody>
+        ${[...d.perDay].reverse().map((x) => `<tr><td>${dayLabel(x.date, false)}</td><td>${fmtDur(x.listen)}</td><td>${fmtDur(x.watch)}</td></tr>`).join('')}
+      </tbody></table>` : `<div class="chart-wrap">${dailyChart(d.perDay)}</div>`}
+    </section>` : ''}
+    <section class="card">
+      <div class="card-head"><h2>By service</h2></div>
+      <div class="svc-bars">
+        ${d.byService.map((x) => {
+          const svc = svcById(x.service) || { name: x.service, logo: '' };
+          return `<div class="svc-bar"><img src="${esc(svc.logo)}" alt=""><span class="svc-bar-name">${esc(svc.name)}</span>
+            <div class="svc-bar-track"><i style="width:${Math.max(2, (x.secs / maxSvc) * 100).toFixed(1)}%"></i></div><span class="svc-bar-time">${fmtDur(x.secs)}</span></div>`;
+        }).join('')}
+      </div>
+    </section>
+    <div class="top-grid">
+      ${rankList('Top songs', d.topSongs, 'Unknown song')}
+      ${rankList('Top artists', d.topArtists, 'Unknown artist')}
+      ${rankList('Top shows & videos', d.topWatched, 'Something on Netflix')}
+      ${rankList('Top streamers', d.topStreamers, 'Unknown streamer')}
+    </div>
+    <p class="muted small stats-foot">Counting since ${d.since ? dayLabel(d.since, false) : 'today'}.
+      <button class="btn sm ghost" data-action="stats-reset">${resetArmed ? 'Click again to delete all stats' : 'Reset stats'}</button></p>`;
+}
+
+// Chart tooltip (lives outside the re-rendered page so it doesn't flicker).
+const chartTip = document.createElement('div');
+chartTip.className = 'chart-tip';
+document.body.appendChild(chartTip);
+document.addEventListener('mousemove', (e) => {
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (!el) { chartTip.classList.remove('show'); return; }
+  const [day, listen, watch] = el.dataset.tip.split('|');
+  chartTip.innerHTML = `<b>${esc(day)}</b><div><i class="sw s-listen"></i>Listening ${esc(listen)}</div><div><i class="sw s-watch"></i>Watching ${esc(watch)}</div>`;
+  chartTip.style.left = `${Math.min(window.innerWidth - 190, e.clientX + 14)}px`;
+  chartTip.style.top = `${e.clientY + 14}px`;
+  chartTip.classList.add('show');
+});
+
 function settingRow(title, hint, control, extra = '') {
   return `<div class="setting ${extra}">
     <div class="setting-text"><div class="setting-title">${title}</div>${hint ? `<div class="setting-hint">${hint}</div>` : ''}</div>
@@ -614,6 +801,19 @@ function pageSettings() {
       ${settingRow('Start minimized', 'Open straight to the tray icon.', sw(s.startMinimized, 'toggle-setting', 'data-key="startMinimized"'))}
       ${settingRow('Start with Windows', state.packaged ? 'Launch Presence Hub when you sign in.' : 'Available in the installed app (not when running from source).',
         sw(s.launchAtLogin, 'toggle-setting', `data-key="launchAtLogin" ${state.packaged ? '' : 'disabled'}`))}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Extras</h2></div>
+      ${settingRow('Live lyrics', 'While a song plays, your status shows the line being sung. Lyrics come from LRCLIB; not every song has synced lyrics.',
+        sw(s.lyrics, 'toggle-setting', 'data-key="lyrics"'))}
+      ${settingRow('Show when it ends', 'Adds “ends 22:41” to movies and episodes.', sw(s.endsAt, 'toggle-setting', 'data-key="endsAt"'))}
+      ${settingRow('Show the game you’re playing', 'Adds “🎮 VALORANT” next to your music or show while a fullscreen game runs.',
+        sw(s.gameCombo, 'toggle-setting', 'data-key="gameCombo"'))}
+      ${settingRow('Mini player', 'A small always-on-top card with play, pause and skip. Drag it anywhere; it shows while something plays.',
+        sw(s.miniPlayer, 'toggle-setting', 'data-key="miniPlayer"'))}
+      ${settingRow('Keep stats', 'Counts your listening and watching time, only on this PC. See the Stats page.',
+        sw(s.statsEnabled, 'toggle-setting', 'data-key="statsEnabled"'))}
     </section>
 
     <section class="card">
@@ -819,6 +1019,25 @@ document.addEventListener('click', (e) => {
       if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
       render();
       break;
+    case 'share-now':
+      api.shareNow().then((res) => toast(res && res.ok ? 'Copied! Paste it in Discord with Ctrl+V' : `Couldn’t make the image: ${(res && res.error) || 'unknown error'}`));
+      break;
+    case 'stats-range':
+      statsRange = el.dataset.value;
+      save('statsRange', statsRange);
+      resetArmed = false;
+      loadStats(true);
+      render();
+      break;
+    case 'stats-table':
+      statsTable = !statsTable;
+      render();
+      break;
+    case 'stats-reset':
+      if (!resetArmed) { resetArmed = true; render(); break; }
+      resetArmed = false;
+      api.resetStats().then(() => loadStats(true));
+      break;
     case 'update-check':
       api.checkUpdate();
       break;
@@ -883,7 +1102,7 @@ api.onState((next) => {
 });
 api.getState().then((s) => {
   state = s;
-  if (!['dashboard', 'services', 'settings', 'setup'].includes(page)) page = 'dashboard';
+  if (!['dashboard', 'stats', 'services', 'settings', 'setup'].includes(page)) page = 'dashboard';
   if (setupProgress().todo > 0 && !load('seen-setup')) {
     page = 'setup';
     save('seen-setup', '1');

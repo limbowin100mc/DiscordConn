@@ -3,6 +3,8 @@
 #  - what Windows knows about playing media (the same info as the volume-key media
 #    pop-up): title, artist, album, playing/paused, position, length
 #  - the open browser windows (each window's title is its current tab's title)
+#  - the game you're playing (a fullscreen app that isn't a browser or known non-game)
+# Reads commands from the app (play/pause/next/previous for the mini player).
 # Started and read by the Presence Hub app; nothing is stored.
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +28,33 @@ public static class PresenceHubWin {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+  [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
+
+  // The foreground window: { handle, pid, title, coversWholeScreen }
+  public static string[] Foreground() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return new string[] { "0", "0", "", "0" };
+    var title = new StringBuilder(512);
+    GetWindowText(h, title, 512);
+    uint pid;
+    GetWindowThreadProcessId(h, out pid);
+    var cls = new StringBuilder(64);
+    GetClassName(h, cls, 64);
+    bool full = false;
+    RECT r;
+    if (cls.ToString() != "Progman" && cls.ToString() != "WorkerW" && GetWindowRect(h, out r)) { // not the desktop
+      var mi = new MONITORINFO();
+      mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+      if (GetMonitorInfo(MonitorFromWindow(h, 2), ref mi)) {
+        full = r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top && r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom;
+      }
+    }
+    return new string[] { h.ToInt64().ToString(), pid.ToString(), title.ToString(), full ? "1" : "0" };
+  }
 
   // Top-level browser windows: { handle, title, pid, isForeground }
   public static List<string[]> BrowserWindows() {
@@ -75,6 +104,25 @@ function SiteAddress([string]$hwnd) {
   return $url
 }
 
+# Games: fullscreen apps that aren't browsers or one of these.
+$NotGames = '^(explorer|applicationframehost|shellexperiencehost|startmenuexperiencehost|searchhost|searchapp|textinputhost|lockapp|discord|discordptb|discordcanary|presence hub|electron|vlc|mpc-hc64|mpc-hc|mpc-be64|potplayermini64|potplayermini|wmplayer|microsoft\.media\.player|video\.ui|spotify|powerpnt|winword|excel|onenote|outlook|olk|teams|ms-teams|zoom|obs64|obs32|code|devenv|idea64|pycharm64|rider64|steam|steamwebhelper|epicgameslauncher|eadesktop|battle\.net|riotclientux|riotclientservices|photos|microsoft\.photos|mspaint|acrobat|acrord32|notepad|windowsterminal|cmd|powershell|pwsh|taskmgr|slack|telegram|whatsapp|snippingtool|screenclippinghost|systemsettings|magnify|nvidia overlay|nvcontainer|gamebar|xboxpcapp|wallpaper64|wallpaper32|lively)$'
+$KnownGames = @{
+  'valorant-win64-shipping' = 'VALORANT'; 'fortniteclient-win64-shipping' = 'Fortnite'; 'cs2' = 'Counter-Strike 2'; 'csgo' = 'Counter-Strike: Global Offensive'
+  'league of legends' = 'League of Legends'; 'r5apex' = 'Apex Legends'; 'r5apex_dx12' = 'Apex Legends'; 'rocketleague' = 'Rocket League'
+  'gta5' = 'Grand Theft Auto V'; 'gta5_enhanced' = 'Grand Theft Auto V'; 'overwatch' = 'Overwatch 2'; 'dota2' = 'Dota 2'; 'javaw' = 'Minecraft'
+  'minecraft.windows' = 'Minecraft'; 'robloxplayerbeta' = 'Roblox'; 'eldenring' = 'ELDEN RING'; 'rainbowsix' = 'Rainbow Six Siege'; 'rainbowsix_vulkan' = 'Rainbow Six Siege'
+  'tslgame' = 'PUBG: BATTLEGROUNDS'; 'rustclient' = 'Rust'; 'project8' = 'Deadlock'; 'marvel-win64-shipping' = 'Marvel Rivals'; 'cyberpunk2077' = 'Cyberpunk 2077'
+  'witcher3' = 'The Witcher 3'; 'cod' = 'Call of Duty'; 'cod24-cod' = 'Call of Duty'; 'fc25' = 'EA SPORTS FC 25'; 'fc26' = 'EA SPORTS FC 26'
+}
+function GameName([string]$proc, [string]$title) {
+  if ($KnownGames.ContainsKey($proc)) { return $KnownGames[$proc] }
+  $t = ($title -replace '\s+', ' ').Trim()
+  if ($t -and $t.Length -le 40) { return $t }
+  $p = ($proc -replace '(-win64)?-shipping$', '') -replace '[_-]+', ' '
+  return (Get-Culture).TextInfo.ToTitleCase($p)
+}
+$game = $null
+
 $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
   $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
 } | Select-Object -First 1
@@ -89,6 +137,33 @@ $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,
 $managerType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]
 $propsType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]
 $manager = $null
+
+# Commands from the app, one JSON line each: { "cmd": "toggle" | "next" | "prev", "app": "<media app id>" }
+# (A StreamReader on the raw input: Console.In would block the loop.)
+$stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput())
+$pendingLine = $stdinReader.ReadLineAsync()
+function Control([string]$app, [string]$cmd) {
+  if (-not $manager) { return }
+  $target = $null
+  foreach ($s in $manager.GetSessions()) { if ($s.SourceAppUserModelId -eq $app) { $target = $s; break } }
+  if (-not $target) { $target = $manager.GetCurrentSession() }
+  if (-not $target) { return }
+  $op = switch ($cmd) {
+    'toggle' { $target.TryTogglePlayPauseAsync() }
+    'next' { $target.TrySkipNextAsync() }
+    'prev' { $target.TrySkipPreviousAsync() }
+    default { $null }
+  }
+  if ($op) { $null = Await $op ([bool]) }
+}
+function HandleCommands {
+  while ($script:pendingLine.IsCompleted) {
+    $line = $script:pendingLine.Result
+    if ($null -eq $line) { exit } # the app closed: stop too
+    try { $c = $line | ConvertFrom-Json; Control $c.app $c.cmd } catch { }
+    $script:pendingLine = $stdinReader.ReadLineAsync()
+  }
+}
 
 $procNames = @{}
 $procNamesAt = [DateTime]::UtcNow
@@ -140,7 +215,22 @@ while ($true) {
   } catch { }
   foreach ($k in @($addressCache.Keys)) { if (-not $seenWindows.ContainsKey($k)) { $addressCache.Remove($k) } }
 
-  $json = [ordered]@{ type = 'state'; sessions = $sessions; windows = $windows } | ConvertTo-Json -Depth 5 -Compress
+  $gameOut = $null
+  try {
+    $fg = [PresenceHubWin]::Foreground()
+    $fgProc = ProcessName ([int]$fg[1])
+    if ($fg[3] -eq '1' -and $fgProc -and $fgProc -notmatch $NotGames -and $fgProc -notmatch $BrowserProcesses) {
+      $game = @{ pid = [int]$fg[1]; name = (GameName $fgProc $fg[2]) }
+    }
+    if ($game) {
+      # Keep showing the game while it runs, even when you alt-tab out of it.
+      if (Get-Process -Id $game.pid -ErrorAction SilentlyContinue) {
+        $gameOut = [ordered]@{ name = $game.name; foreground = ([int]$fg[1] -eq $game.pid) }
+      } else { $game = $null }
+    }
+  } catch { }
+
+  $json = [ordered]@{ type = 'state'; sessions = $sessions; windows = $windows; game = $gameOut } | ConvertTo-Json -Depth 5 -Compress
   $now = [DateTime]::UtcNow
   if ($json -ne $last -or ($now - $lastBeat).TotalSeconds -ge 15) {
     [Console]::Out.WriteLine($json)
@@ -148,5 +238,5 @@ while ($true) {
     $last = $json
     $lastBeat = $now
   }
-  Start-Sleep -Milliseconds 1000
+  for ($i = 0; $i -lt 10; $i++) { HandleCommands; Start-Sleep -Milliseconds 100 }
 }

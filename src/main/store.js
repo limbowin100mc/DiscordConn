@@ -10,6 +10,11 @@ const GENERAL_DEFAULTS = {
   startMinimized: false,
   launchAtLogin: false,
   autoUpdate: true, // check GitHub for new versions in the background
+  lyrics: true, // live lyrics in your status while music plays
+  endsAt: true, // "ends 22:41" for movies and episodes
+  gameCombo: true, // "🎮 VALORANT" next to what's playing while a game runs
+  miniPlayer: false, // small floating now-playing window
+  statsEnabled: true, // keep local listening/watching stats
   statusDisplay: 'name', // what the member list shows: name | details | state
   fallbackClientId: '',
   preferred: null, // service id that wins when several are active
@@ -32,6 +37,7 @@ class Store extends EventEmitter {
     for (const key of Object.keys(GENERAL_DEFAULTS)) {
       if (key in patch) next[key] = patch[key];
     }
+    if ('miniBounds' in patch) next.miniBounds = patch.miniBounds;
     this.data = this._normalize(next);
     this._save();
   }
@@ -56,6 +62,8 @@ class Store extends EventEmitter {
     }
     if (raw && (typeof raw.preferred === 'string' || raw.preferred === null)) out.preferred = raw.preferred;
     if (!['name', 'details', 'state'].includes(out.statusDisplay)) out.statusDisplay = 'name';
+    const b = raw && raw.miniBounds;
+    out.miniBounds = b && [b.x, b.y].every(Number.isFinite) ? { x: Math.round(b.x), y: Math.round(b.y) } : null;
     out.fallbackClientId = String(out.fallbackClientId || '').replace(/\D/g, '');
 
     out.services = {};

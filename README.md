@@ -22,6 +22,17 @@ Show what you're doing in your browser as your **Discord activity**: the YouTube
 
 Logos: if a service's Discord application has an **App Icon**, that icon is used as the logo. Otherwise the official one is used.
 
+## Extras
+All of these can be switched on or off in **Settings → Extras**.
+
+- **Live lyrics.** While a song plays, your status shows the line being sung (`🎤 I've been tryna call`), and the album moves to the cover's hover text. Synced lyrics come from [LRCLIB](https://lrclib.net), a free public lyrics database; only the song's title, artist, album and length are sent. Songs without synced lyrics show as usual.
+- **Ends at.** Movies and episodes of 10 minutes or more get `· ends 22:41` added, so friends know when you're free.
+- **Game combo.** When a fullscreen game is running, `🎮 VALORANT` is added next to your music or show. Games are recognised as fullscreen windows that aren't a browser, Discord, a media player or a launcher; well-known games get their proper name.
+- **Mini player.** A small always-on-top card with the cover, progress, ⏮ ⏯ ⏭ and a share button. Drag it anywhere; it remembers where you put it and hides when nothing plays. Turn it on in Settings or from the tray menu. The buttons control the browser tab that's playing (through Windows' media controls), so they work for every site and browser.
+- **Share now playing.** The share button (Dashboard or mini player) copies an image of what you're playing to the clipboard. Paste it in any Discord chat with Ctrl+V.
+- **Stats.** The **Stats** page shows how long you listened and watched (today, 7 days, 30 days, all time), a chart per day, time per service, and your top songs, artists, shows and streamers. Stats are only stored on this PC (`%APPDATA%\Presence Hub\stats.json`), and **Reset stats** clears them.
+- **Smoother switching.** If what you're playing stops or goes away for a moment (skipping a song, the next episode loading, a tab reloading), your activity stays for a few seconds instead of flickering off and on.
+
 ## How it works
 
 ```
@@ -58,8 +69,8 @@ Open `chrome://extensions` (or `edge://extensions`, …), turn on **Developer mo
 **Settings → Updates** shows the installed version and checks this repo's [GitHub Releases](https://github.com/limbowin100mc/DiscordConn/releases) for a newer one. It checks by itself when the app starts and every few hours (you can turn that off). When there's an update, a card appears in the sidebar; **Download & install** fetches it, and **Restart & update** installs it. Nothing installs without you clicking.
 
 ## Releasing a new version
-1. Bump `version` in `package.json` (e.g. `1.6.0`) and commit.
-2. Tag and push: `git tag v1.6.0 && git push origin main v1.6.0`.
+1. Bump `version` in `package.json` (e.g. `1.7.0`) and commit.
+2. Tag and push: `git tag v1.7.0 && git push origin main v1.7.0`.
 3. GitHub Actions builds the installer and publishes the release. Installed apps then offer the update.
 
 Every push to `main` also builds the installer; it's attached to the workflow run under **Artifacts**.
@@ -90,15 +101,20 @@ src/main/              Electron main process
   discord-apps.js        built-in Discord application IDs
   discord-ipc.js         Discord RPC client (named pipe protocol)
   presence-manager.js    connection, reconnects, rate limit (5 updates / 20 s)
-  engine.js              picks the activity to show
+  engine.js              picks the activity to show (+ lyrics, ends at, game)
+  lyrics.js              synced lyrics from LRCLIB
+  stats.js               listening/watching stats (stats.json)
+  mini-player.js         the always-on-top mini player window
+  share-card.js          renders the "now playing" image for the clipboard
   bridge.js              local WebSocket server for the optional extension
   store.js               settings (%APPDATA%\Presence Hub\settings.json)
   services/              one file per site
   watcher/               built-in detection
-    media-watcher.ps1      reads Windows media sessions + browser window titles
+    media-watcher.ps1      reads Windows media sessions + browser window titles, finds
+                           fullscreen games, and sends play/pause/skip to a media session
     local-detector.js      turns them into detected sites
     lookups.js             YouTube video / album art / Kick channel lookups
-src/renderer/          the app UI
+src/renderer/          the app UI (index.html), mini player (mini.html), share card (share.html)
 extension/             optional browser extension (Manifest V3)
 assets/                app icons and Discord app icons
 ```
