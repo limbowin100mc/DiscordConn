@@ -14,6 +14,8 @@ const { Lyrics } = require('./lyrics');
 const { Stats } = require('./stats');
 const { MiniPlayer } = require('./mini-player');
 const { shareNowPlaying } = require('./share-card');
+const { SoundCloudWeb } = require('./soundcloud-web');
+const { Accounts } = require('./accounts');
 const registry = require('./services');
 
 const PORT = 47823;
@@ -29,6 +31,7 @@ let tray = null;
 let store;
 let bridge;
 let detector;
+let accounts;
 let presence;
 let updater;
 let stats;
@@ -51,11 +54,25 @@ function start() {
 
   store = new Store(app.getPath('userData'), registry.services);
   bridge = new Bridge(PORT);
+  const fetcher = (url, opts) => net.fetch(url, opts);
+  const soundcloud = new SoundCloudWeb(fetcher);
   detector = new LocalDetector({
     // PowerShell can't read files inside app.asar, so the script ships unpacked.
     scriptPath: path.join(__dirname, 'watcher', 'media-watcher.ps1').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
-    fetcher: (url, opts) => net.fetch(url, opts),
+    fetcher,
     memoryFile: path.join(app.getPath('userData'), 'detector-memory.json'),
+    soundcloud,
+  });
+  accounts = new Accounts({
+    dir: app.getPath('userData'),
+    fetcher,
+    soundcloud,
+    bridge,
+    port: PORT,
+    store,
+    openExternal,
+    window: () => win,
+    icon: path.join(ASSETS, 'icon.png'),
   });
   presence = new PresenceManager();
   updater = new Updater();
@@ -66,6 +83,7 @@ function start() {
     store,
     bridge,
     detector,
+    accounts,
     presence,
     appIcons,
     updater,
@@ -93,6 +111,7 @@ function start() {
   registerIpc();
   bridge.start();
   detector.start();
+  accounts.start();
   engine.compute();
   applyLoginItem();
   updater.setAutomatic(store.get().autoUpdate);
@@ -121,6 +140,7 @@ async function cleanup() {
   miniPlayer.destroy();
   bridge.stop();
   detector.stop();
+  accounts.stop();
   await Promise.race([presence.destroy(), new Promise((r) => setTimeout(r, 1500))]);
 }
 
@@ -246,6 +266,11 @@ function registerIpc() {
     }
     return testClientId(clientId);
   });
+
+  ipcMain.handle('account:connect', (_e, id) => accounts.connect(String(id)));
+  ipcMain.handle('account:cancel', (_e, id) => accounts.cancel(String(id)));
+  ipcMain.handle('account:disconnect', (_e, id) => accounts.disconnect(String(id)));
+  ipcMain.handle('account:token', (_e, id, token) => accounts.useToken(String(id), String(token || '')));
 
   ipcMain.handle('update:check', () => updater.check());
   ipcMain.handle('update:download', () => updater.download());

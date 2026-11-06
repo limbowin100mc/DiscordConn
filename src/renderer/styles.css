@@ -507,6 +507,18 @@ kbd, code {
 }
 .coming-soon svg { width: 26px; height: 26px; color: var(--text-2); }
 
+/* ---------- connections ---------- */
+
+.acct-body { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 14px 18px 0; }
+.acct-user { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
+.acct-user img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: #0d1016; }
+.acct-user b { color: var(--text); font-weight: 600; }
+.acct-now { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); min-width: 0; }
+.acct-now .dot { flex: none; }
+.acct-now .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acct-error { font-size: 12px; color: var(--bad); }
+.card.acct-note { margin-top: 16px; }
+
 /* ---------- settings ---------- */
 
 .setting { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 0; border-top: 1px solid var(--line); }

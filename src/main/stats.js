@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const MUSIC = new Set(['spotify', 'ytmusic']);
+const MUSIC = new Set(['spotify', 'ytmusic', 'soundcloud']);
 const KEEP_DAYS = 400;
 const MAX_GAP = 20000; // don't count time across sleeps or long stalls
 
@@ -21,6 +21,7 @@ function itemOf(src) {
   switch (src.service) {
     case 'spotify':
     case 'ytmusic':
+    case 'soundcloud':
       return d.title ? { key: `${d.title}|${(d.artists || []).join(', ')}`, title: d.title, sub: (d.artists || []).join(', ') } : null;
     case 'youtube':
       return d.title ? { key: `${d.title}|${d.channel || ''}`, title: d.title, sub: d.channel || '' } : null;

@@ -1,6 +1,6 @@
 # Presence Hub
 
-Show what you're doing in your browser as your **Discord activity**: the YouTube video you're watching, the Kick stream you're on, the song playing in the Spotify web player (with time left), or just that you're on X.
+Show what you're doing in your browser as your **Discord activity**: the YouTube video you're watching, the Kick stream you're on, the song playing in the Spotify web player or on SoundCloud (with time left), or just that you're on X. Connect your Spotify or SoundCloud account and what you play on your phone shows up too.
 
 **Nothing to set up:** install, keep it open, done. It works with every browser (Chrome, Edge, Brave, Opera, Vivaldi, Firefox…) without an extension, and without creating Discord applications.
 
@@ -17,10 +17,25 @@ Show what you're doing in your browser as your **Discord activity**: the YouTube
 | Prime Video | Watching Prime Video | Show and season (or movie), cover art, time left |
 | Spotify (web player) | Listening to Spotify | Song, artist, album cover, time left |
 | YouTube Music | Listening to YouTube Music | Song, artist, cover, time left |
+| SoundCloud | Listening to SoundCloud | Track, artist, artwork, time left, "Listen on SoundCloud" button |
 | Kick | Watching Kick | Streamer, stream title, category, profile picture, "Watch Stream" button |
 | X | Watching X | "Scrolling the timeline", "Viewing a profile"… |
 
 Logos: if a service's Discord application has an **App Icon**, that icon is used as the logo. Otherwise the official one is used.
+
+## Connected accounts: your phone too
+**Connections** links your Spotify and SoundCloud accounts, so what you play anywhere shows on your profile: on your phone (on any network), in the desktop apps, on a speaker. Presence Hub and the Discord desktop app need to be running on this PC; that's what puts it on your profile.
+
+- **Spotify** asks Spotify's Web API what's playing every few seconds, with the device it plays on. Spotify only shares this with apps registered with it (free):
+  1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **Create app**.
+  2. Add the redirect URI `http://127.0.0.1:47823/callback/spotify` and tick **Web API**.
+  3. Paste the app's **Client ID** in Presence Hub → Connections, then click **Connect Spotify** and allow access in your browser.
+
+  The app starts in development mode: add every Spotify account that should connect under **User Management** (if Spotify refuses yours, add it too). To ship one built in, put its Client ID in `BUILT_IN_CLIENT_ID` in `src/main/accounts/spotify.js`.
+- **SoundCloud** opens SoundCloud's own sign-in page in a window. SoundCloud has no public "now playing", so Presence Hub reads your listening history: SoundCloud adds a track there a second after it starts, and it shows until its length has passed. SoundCloud doesn't share pausing, so a paused track keeps showing until it would have ended. If the sign-in window doesn't work for you, sign in with the `oauth_token` cookie from soundcloud.com instead.
+- Sign-ins are stored in `%APPDATA%Presence Hubaccounts.json`, encrypted with Windows' data protection. **Disconnect** removes them.
+- When the same song also plays in a browser on this PC, the browser's copy is used (it notices pausing right away), with the account's exact link and cover.
+- If Spotify is also linked in Discord (**Settings → Connections**), turn off **Display Spotify as your status** there, or you'll show up twice.
 
 ## Extras
 All of these can be switched on or off in **Settings → Extras**.
@@ -40,7 +55,7 @@ Browsers ──► Windows media info + browser window titles ──► Presence
 ```
 
 - **Built-in detection (default).** Every browser reports what's playing to Windows (the same info as the media pop-up on the volume keys): title, artist, album, playing or paused, position and length. Presence Hub reads that, plus the title of each browser window (that is, the tab it's showing). Then it fills in the rest online: the YouTube video (for its thumbnail and link), album art (iTunes), and Kick channel info.
-- **Built-in Discord apps.** The Discord applications ("YouTube", "Spotify", "Kick", "X") ship with the app in `src/main/discord-apps.js`, so users don't create their own. Application IDs are public, not secrets.
+- **Built-in Discord apps.** The Discord applications ("YouTube", "Spotify", "SoundCloud", "Kick", "X"…) ship with the app in `src/main/discord-apps.js`, so users don't create their own. Application IDs are public, not secrets.
 - **Optional browser extension** (Chrome, Edge, Brave, Opera). It reads the pages directly, so it's more precise: X and paused videos in background tabs, exact links and Spotify track buttons. When it's installed, its results win for the sites it reports.
 
 If several things are open, it shows, in this order:
@@ -51,6 +66,7 @@ If several things are open, it shows, in this order:
 ### Built-in detection: good to know
 - Windows only knows about tabs that play media, one per browser at a time (the latest one). Sites without media, like X, are seen when they're the tab showing in a browser window. Minimized windows count.
 - Spotify is recognised by its album info, so a song from another music site may show up as Spotify too.
+- SoundCloud titles a playing tab "<track> by <uploader>", which is how it's recognised. When it moves on to the next track with its tab hidden, the new track still counts as SoundCloud. The link, artwork and artist come from looking the track up on SoundCloud.
 - While a YouTube, YouTube Music, Netflix or Prime Video tab is showing, the app reads that window's address bar (only for those sites) to remember exactly what's playing. It keeps showing after you switch to another tab, minimize the browser, or play a game.
 - Prime Video titles its pages "Prime Video: The Boys - Season 1", so the show and season are known even in a background tab. The exact episode needs the extension. The cover comes from the show's public page, found through the address bar while the tab is showing.
 - YouTube Music titles its tab just "YouTube Music" except on a song's own page. A track playing while that tab is showing, or in a browser where YouTube Music was the last music site you used, counts as YouTube Music.

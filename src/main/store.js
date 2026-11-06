@@ -17,6 +17,7 @@ const GENERAL_DEFAULTS = {
   statsEnabled: true, // keep local listening/watching stats
   statusDisplay: 'name', // what the member list shows: name | details | state
   fallbackClientId: '',
+  spotifyClientId: '', // your Spotify app, for connecting your Spotify account
   preferred: null, // service id that wins when several are active
 };
 
@@ -65,6 +66,7 @@ class Store extends EventEmitter {
     const b = raw && raw.miniBounds;
     out.miniBounds = b && [b.x, b.y].every(Number.isFinite) ? { x: Math.round(b.x), y: Math.round(b.y) } : null;
     out.fallbackClientId = String(out.fallbackClientId || '').replace(/\D/g, '');
+    out.spotifyClientId = String(out.spotifyClientId || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
 
     out.services = {};
     for (const svc of this.services) {

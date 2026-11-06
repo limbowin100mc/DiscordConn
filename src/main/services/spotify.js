@@ -7,7 +7,7 @@ module.exports = {
   name: 'Spotify',
   site: 'open.spotify.com',
   url: 'https://open.spotify.com',
-  description: 'The song playing in the Spotify web player, with album art and time left.',
+  description: 'The song playing in the Spotify web player, or on any device once your account is connected, with album art and time left.',
   color: '#1ed760',
   logo: 'logos/spotify.png',
   logoUrl: 'https://open.spotifycdn.com/cdn/images/icons/Spotify_512.png',

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Presence Hub Connector",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Lets the Presence Hub desktop app show the video, stream or song you have open as your Discord activity.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -30,6 +30,7 @@
     "https://www.youtube.com/*",
     "https://music.youtube.com/*",
     "https://open.spotify.com/*",
+    "https://soundcloud.com/*",
     "https://kick.com/*",
     "https://x.com/*",
     "https://twitter.com/*",
@@ -77,6 +78,16 @@
       "js": [
         "content/common.js",
         "content/spotify.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://soundcloud.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/soundcloud.js"
       ],
       "run_at": "document_idle"
     },

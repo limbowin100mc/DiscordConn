@@ -80,6 +80,10 @@ function classifyPrime(t) {
   return { service: 'primevideo', page: 'title', title: m ? m[1] : name, season: m ? m[2] : '' };
 }
 
+// SoundCloud titles a playing tab "<track> by <uploader>", or "<track> in <playlist>".
+const soundCloudShows = (t, s) => !!s.artist
+  && (t.startsWith(`${s.title} by ${s.artist}`) || (!!s.album && t.startsWith(`${s.title} in ${s.album}`)));
+
 // What site is a (cleaned) tab title from?
 function classifyTitle(t) {
   let m;
@@ -94,6 +98,8 @@ function classifyTitle(t) {
   if ((m = t.match(new RegExp(`^(.+) [|-] YouTube Music${PROFILE}`)))) return { service: 'ytmusic', song: true, title: m[1] };
   if (new RegExp(`^YouTube${PROFILE}`).test(t)) return { service: 'youtube', page: 'home' };
   if ((m = t.match(new RegExp(`^(.*) - YouTube${PROFILE}`)))) return { service: 'youtube', page: 'other', title: m[1] };
+  // Other SoundCloud pages: "Discover … on SoundCloud", "SoundCloud – Hear the world’s sounds"
+  if (new RegExp(`(?: on SoundCloud|^SoundCloud [–-] .+)${PROFILE}`).test(t)) return { service: 'soundcloud', idle: true };
   if (/^Spotify\s*[-–—]\s*Web Player/i.test(t)) return { service: 'spotify', idle: true };
   if ((m = t.match(/^(.+?) • (.+?)$/))) return { service: 'spotify', song: true, title: m[1], artist: m[2].replace(new RegExp(PROFILE), '') };
   if (/ \/ (X|Twitter)(?: - [^-]+)?$/.test(t)) return classifyX(t);
@@ -107,7 +113,8 @@ function windowShows(cleanTitle, s) {
     || cleanTitle.startsWith(`${s.title} - `)
     || cleanTitle.startsWith(`${s.title} | `)
     || (/^Prime Video: /.test(cleanTitle) && s.title.length > 2 && cleanTitle.includes(s.title))
-    || (s.artist && cleanTitle.startsWith(`${s.title} • ${s.artist}`));
+    || (s.artist && cleanTitle.startsWith(`${s.title} • ${s.artist}`))
+    || soundCloudShows(cleanTitle, s);
 }
 
 // "youtube.com/watch?v=ID", "music.youtube.com/watch?v=ID&list=..", "youtube.com/shorts/ID", "/live/ID"
@@ -128,11 +135,11 @@ const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const norm = (v) => String(v || '').toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
 
 class LocalDetector extends EventEmitter {
-  constructor({ scriptPath, fetcher, memoryFile = null }) {
+  constructor({ scriptPath, fetcher, memoryFile = null, soundcloud = null }) {
     super();
     this.scriptPath = scriptPath;
     this.memoryFile = memoryFile; // remembers the music site last used per browser across restarts
-    this.lookups = new Lookups(fetcher, () => this._rebuild());
+    this.lookups = new Lookups(fetcher, () => this._rebuild(), soundcloud);
     this.raw = { sessions: [], windows: [] };
     this.entries = [];
     this.focus = new Map(); // entry key -> last time it was in the foreground
@@ -142,6 +149,7 @@ class LocalDetector extends EventEmitter {
     this.mediaSite = new Map(); // "<app>|<title>" -> site, learned while that tab was showing
     this.mediaVideo = new Map(); // "<app>|<title>" -> YouTube video id, read from the address bar while showing
     this.lastMusic = new Map(); // browser -> 'spotify' | 'ytmusic', the music site last seen in it
+    this.soundcloudAt = new Map(); // media app id -> last time it was playing SoundCloud
     this._loadMemory();
     this.status = { running: false, error: null, browsers: [] };
     this.restartDelay = 2000;
@@ -276,6 +284,8 @@ class LocalDetector extends EventEmitter {
       if (!w.info || shown.has(w.id)) continue;
       // Every Netflix page is titled "Netflix": if Netflix is already playing in this browser, that's the same tab.
       if (w.info.service === 'netflix' && entries.some((e) => e.service === 'netflix' && e.browser === w.browser)) continue;
+      // A paused SoundCloud tab is titled after the page, not the track: still the same tab.
+      if (w.info.service === 'soundcloud' && entries.some((e) => e.service === 'soundcloud' && e.browser === w.browser)) continue;
       const entry = this._fromWindow(w, now);
       if (entry) {
         entry.windowId = w.id;
@@ -334,11 +344,22 @@ class LocalDetector extends EventEmitter {
     // to the music site last seen in this browser.
     const memo = `${s.app}|${s.title}`;
     let site = info && ['spotify', 'ytmusic', 'youtube'].includes(info.service) ? info.service : null;
+    if (!site && win && soundCloudShows(win.clean, s)) site = 'soundcloud';
     if (site) {
       this.mediaSite.set(memo, site);
       if (this.mediaSite.size > 200) this.mediaSite.delete(this.mediaSite.keys().next().value);
     } else {
       site = this.mediaSite.get(memo) || null;
+      // SoundCloud moves on to the next track by itself, usually with its tab hidden: a new
+      // track in the media session that was just playing SoundCloud is from SoundCloud too.
+      if (!site && now - (this.soundcloudAt.get(s.app) || 0) < 30000) {
+        site = 'soundcloud';
+        this.mediaSite.set(memo, site);
+      }
+    }
+    if (site === 'soundcloud') {
+      this.soundcloudAt.set(s.app, now);
+      return this._soundcloud(s, browser, key('soundcloud'), playing, now);
     }
     // YouTube Music titles its tab just "YouTube Music" except on the song's own page, so
     // a track (with an artist) playing while such a tab is showing in this browser is from it.
@@ -523,6 +544,28 @@ class LocalDetector extends EventEmitter {
     };
   }
 
+  // SoundCloud tells Windows the track, the uploader and the playlist (or album); the
+  // link, artwork and the real artist name come from looking the track up.
+  _soundcloud(s, browser, key, playing, now) {
+    const t = this.lookups.soundcloud(s.title, s.artist || '');
+    const query = encodeURIComponent(`${s.title} ${s.artist || ''}`.trim());
+    return {
+      key,
+      browser,
+      service: 'soundcloud',
+      source: 'built-in',
+      data: {
+        title: s.title,
+        artists: [(t && t.artist) || s.artist].filter(Boolean),
+        album: s.album || (t && t.album) || '',
+        cover: (t && t.cover) || null,
+        url: (t && t.url) || `https://soundcloud.com/search?q=${query}`,
+        playing,
+        timeline: timelineOf(s, now),
+      },
+    };
+  }
+
   _kick(name, browser, key, playing, now, streamTitle = '') {
     const ch = this.lookups.kick(name);
     const slug = (ch && ch.slug) || name.toLowerCase();
@@ -568,6 +611,7 @@ class LocalDetector extends EventEmitter {
         // (other sites use "•" too), so on its own only the idle player counts.
         return info.song ? null : { ...base, data: { idle: true, sessionStart } };
       case 'ytmusic':
+      case 'soundcloud':
         // Without a media session we can't tell playing from paused, so it only counts as "open".
         return { ...base, data: { idle: true, sessionStart } };
       case 'kick':

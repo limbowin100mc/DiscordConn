@@ -8,6 +8,7 @@ const services = [
   require('./primevideo'),
   require('./spotify'),
   require('./ytmusic'),
+  require('./soundcloud'),
   require('./kick'),
   require('./x'),
 ];

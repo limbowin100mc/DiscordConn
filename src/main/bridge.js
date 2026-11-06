@@ -18,7 +18,12 @@ class Bridge extends EventEmitter {
     this.port = port;
     this.clients = new Map();
     this.nextId = 1;
+    this.routes = new Map(); // path -> (searchParams) => html, e.g. where Spotify sends you after signing in
     this.status = { listening: false, error: null, port };
+  }
+
+  route(pathname, handler) {
+    this.routes.set(pathname, handler);
   }
 
   start() {
@@ -28,6 +33,19 @@ class Bridge extends EventEmitter {
       if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ app: 'presence-hub', ok: true }));
+        return;
+      }
+      let url = null;
+      try { url = new URL(req.url, 'http://127.0.0.1'); } catch { /* not one of ours */ }
+      const handler = url && req.method === 'GET' && this.routes.get(url.pathname);
+      if (handler) {
+        Promise.resolve()
+          .then(() => handler(url.searchParams))
+          .then((html) => {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(html);
+          })
+          .catch(() => { res.writeHead(500); res.end(); });
         return;
       }
       res.writeHead(404);

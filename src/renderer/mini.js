@@ -34,7 +34,7 @@ function render() {
   const art = isUrl(assets.large_image) ? assets.large_image : svc.logo;
   const t = a.timestamps || {};
   const sub = cur.lyrics ? a.state : a.state || assets.large_text || '';
-  const key = JSON.stringify([cur.key, a.details, sub, art, t.start, t.end, cur.playing]);
+  const key = JSON.stringify([cur.key, a.details, sub, art, t.start, t.end, cur.playing, cur.remote]);
   if (key === shownKey) return tick();
   shownKey = key;
   card.innerHTML = `
@@ -47,9 +47,9 @@ function render() {
       <div class="row">
         ${t.start && t.end ? `<span class="time" id="pos"></span><div class="bar"><i id="fill"></i></div><span class="time">${fmt((t.end - t.start) / 1000)}</span>` : '<div style="flex:1"></div>'}
         <div class="controls">
-          <button data-act="prev" title="Previous">${ICONS.prev}</button>
+          ${cur.remote ? '' : `<button data-act="prev" title="Previous">${ICONS.prev}</button>
           <button data-act="toggle" class="play" title="Play / pause">${cur.playing ? ICONS.pause : ICONS.play}</button>
-          <button data-act="next" title="Next">${ICONS.next}</button>
+          <button data-act="next" title="Next">${ICONS.next}</button>`}
           <button data-act="share" title="Copy a now-playing image to paste in Discord">${ICONS.share}</button>
         </div>
       </div>

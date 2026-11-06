@@ -9,6 +9,8 @@ let page = load('page') || 'dashboard';
 const expanded = new Set();
 const ownApp = new Set(); // services where you chose to enter your own Discord app
 const tests = {}; // service id -> { pending } | { ok, text }
+let tokenOpen = false; // SoundCloud: sign in with a pasted token instead
+let tokenDraft = ''; // what's typed there (re-renders would clear it otherwise)
 
 /* ---------- helpers ---------- */
 
@@ -60,6 +62,7 @@ const ICONS = {
   dashboard: svg('<rect width="7" height="9" x="3" y="3" rx="1.5"/><rect width="7" height="5" x="14" y="3" rx="1.5"/><rect width="7" height="9" x="14" y="12" rx="1.5"/><rect width="7" height="5" x="3" y="16" rx="1.5"/>'),
   stats: svg('<path d="M3 3v18h18"/><rect width="4" height="7" x="7" y="10" rx="1"/><rect width="4" height="12" x="13" y="5" rx="1"/>'),
   share: svg('<path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>'),
+  accounts: svg('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
   services: svg('<rect width="8" height="8" x="3" y="3" rx="2"/><rect width="8" height="8" x="13" y="3" rx="2"/><rect width="8" height="8" x="3" y="13" rx="2"/><path d="M17 13v8M13 17h8"/>'),
   settings: svg('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
   setup: svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'),
@@ -197,7 +200,7 @@ function render() {
   if (!state) return;
   renderTitlebar();
   renderSidebar();
-  const pages = { dashboard: pageDashboard, stats: pageStats, services: pageServices, settings: pageSettings, setup: pageSetup };
+  const pages = { dashboard: pageDashboard, stats: pageStats, services: pageServices, accounts: pageAccounts, settings: pageSettings, setup: pageSetup };
   if (page === 'stats') loadStats();
   const content = document.getElementById('content');
   const html = `<div class="page" data-page="${page}">${(pages[page] || pageDashboard)()}</div>`;
@@ -226,6 +229,7 @@ function renderSidebar() {
     ['dashboard', 'Dashboard'],
     ['stats', 'Stats'],
     ['services', 'Services'],
+    ['accounts', 'Connections', Object.values(state.accounts).filter((a) => a.connected && a.error).length],
     ['settings', 'Settings', ['available', 'downloaded'].includes(state.update.status) ? 1 : 0],
     ['setup', 'Setup guide', prog.todo],
   ];
@@ -449,7 +453,7 @@ function pageDashboard() {
     </div>
     <section class="card">
       <div class="card-head">
-        <h2>Found in your browsers</h2>
+        <h2>Found on your devices</h2>
         <span class="muted small">${sources.length > 1 ? '★ marks a service as always first' : ''}</span>
       </div>
       <div class="source-list">
@@ -472,7 +476,7 @@ function sourceRow(src) {
   };
   const [cls, text] = BADGES[src.status] || ['', src.status];
   const preferred = state.settings.preferred === svc.id;
-  const title = a ? a.details || svc.name : `${svc.name} is open`;
+  const title = a ? a.details || svc.name : src.source === 'account' ? `${svc.name} is paused` : `${svc.name} is open`;
   const sub = [svc.name, a && a.state, src.browser].filter(Boolean).map(esc).join(' · ');
   const badge = src.status === 'setup'
     ? `<button class="badge warn" style="border:0;cursor:pointer" data-action="goto-service" data-id="${svc.id}">${text}</button>`
@@ -592,6 +596,115 @@ function pageServices() {
         <div class="small">New sites can be added as small plug-ins.</div>
       </section>
     </div>`;
+}
+
+/* ---------- connections ---------- */
+
+const ACCOUNTS = {
+  spotify: 'What you play on Spotify anywhere: your phone, the desktop app, a speaker or another computer.',
+  soundcloud: 'What you play on SoundCloud anywhere, the phone app included.',
+};
+
+function accountCard(id) {
+  const svc = svcById(id);
+  const a = state.accounts[id];
+  if (!svc || !a) return '';
+  const src = state.sources.find((x) => x.source === 'account' && x.service === id);
+
+  let badge = ['off', 'Not connected'];
+  if (a.connected) badge = a.error ? ['warn', 'Connected, with a problem'] : ['live', 'Connected'];
+  else if (a.connecting) badge = ['warn', 'Signing in…'];
+
+  const rows = [];
+  if (a.connected && a.user) {
+    rows.push(`<div class="acct-user"><img src="${esc(a.user.image || svc.logo)}" alt=""><span>Signed in as <b>${esc(a.user.name)}</b></span></div>`);
+  }
+  if (src) {
+    const what = src.activity ? [src.activity.details, src.activity.state].filter(Boolean).join(' — ') : 'Paused';
+    rows.push(`<div class="acct-now"><span class="dot ${src.playing ? 'live' : ''}"></span><span class="t">${esc(what)}${a.device ? ` · on ${esc(a.device)}` : ''}</span></div>`);
+  }
+  if (a.error) rows.push(`<div class="acct-error">${esc(a.error)}</div>`);
+
+  if (!a.connected && id === 'spotify') {
+    const port = state.bridge.listening ? '' : `<div class="acct-error">Presence Hub can’t receive Spotify’s answer: ${esc(state.bridge.error || 'the local port isn’t open')}.</div>`;
+    rows.push(`
+      <div class="field">
+        <label class="field-label" for="spotify-cid">Spotify Client ID</label>
+        <input id="spotify-cid" class="input mono" data-bind="spotifyClientId" value="${esc(state.settings.spotifyClientId)}"
+          placeholder="${a.builtInClientId ? 'Built in. Paste your own to use it instead' : 'Paste the Client ID of your Spotify app'}" spellcheck="false" autocomplete="off">
+        <div class="field-hint">Spotify only shares what’s playing with apps registered with it, and that’s free:
+          create an app in the <a data-action="open-url" data-url="https://developer.spotify.com/dashboard">Spotify Developer Dashboard</a>,
+          tick <b>Web API</b>, add the redirect URI below, and paste the app’s Client ID here.</div>
+      </div>
+      <div class="field">
+        <div class="field-label">Redirect URI</div>
+        <div class="input-row"><div class="path-box" style="flex:1">${esc(a.redirectUri)}</div>
+          <button class="btn" data-action="copy" data-text="${esc(a.redirectUri)}">${ICONS.copy}Copy</button></div>
+        <div class="field-hint">To connect someone else’s Spotify, add their account under <b>User Management</b> in the dashboard first.</div>
+      </div>${port}`);
+  }
+
+  if (!a.connected && id === 'soundcloud') {
+    rows.push(`<div class="field-hint">Opens SoundCloud’s sign-in page. Only your sign-in is kept, encrypted on this PC.
+      <a data-action="account-token-toggle">${tokenOpen ? 'Hide' : 'Sign in with a token instead'}</a></div>`);
+    if (tokenOpen) {
+      rows.push(`<div class="field">
+        <label class="field-label" for="sc-token">SoundCloud token</label>
+        <div class="input-row">
+          <input id="sc-token" class="input mono" value="${esc(tokenDraft)}" placeholder="2-123456-…" spellcheck="false" autocomplete="off">
+          <button class="btn" data-action="account-token-save" data-id="soundcloud">Sign in</button>
+        </div>
+        <div class="field-hint">In a browser where you’re signed in to SoundCloud, press F12, open <b>Application → Cookies → https://soundcloud.com</b> and copy the value of <code>oauth_token</code>.</div>
+      </div>`);
+    }
+  }
+
+  let actions;
+  if (a.connected) {
+    actions = `<button class="btn sm ghost" data-action="account-disconnect" data-id="${id}">Disconnect</button>`;
+  } else if (a.connecting) {
+    actions = id === 'spotify'
+      ? `<span class="muted small">Allow access in the browser tab that opened.</span>
+         <span><button class="btn sm ghost" data-action="account-cancel" data-id="${id}">Cancel</button>
+         <button class="btn sm" data-action="account-connect" data-id="${id}">Open again</button></span>`
+      : '<span class="muted small">Finish signing in in the SoundCloud window.</span>';
+  } else {
+    const ready = id !== 'spotify' || a.hasClientId;
+    actions = `<span></span><button class="btn primary sm" data-action="account-connect" data-id="${id}" ${ready ? '' : 'disabled'}>Connect ${esc(svc.name)}</button>`;
+  }
+
+  return `
+    <section class="card service-card" style="--brand:${esc(svc.color)}">
+      <div class="svc-head">
+        <img class="svc-logo" src="${esc(svc.logo)}" alt="">
+        <div class="svc-name"><h3>${esc(svc.name)}</h3><div class="svc-site">Your ${esc(svc.name)} account</div></div>
+        <span class="badge ${badge[0]}">${badge[1]}</span>
+      </div>
+      <p class="svc-desc">${esc(ACCOUNTS[id])}</p>
+      ${rows.length ? `<div class="acct-body">${rows.join('')}</div>` : ''}
+      <div class="svc-foot">${a.connected ? '<span></span>' : ''}${actions}</div>
+    </section>`;
+}
+
+function pageAccounts() {
+  return `
+    <div class="page-head">
+      <h1>Connections</h1>
+      <p class="sub">Connect your accounts to show what you play on your phone, in the desktop apps or on any other device, on any network.
+        Keep Presence Hub and Discord open on this PC: that’s what puts it on your profile.</p>
+    </div>
+    <div class="service-grid">
+      ${Object.keys(ACCOUNTS).map(accountCard).join('')}
+    </div>
+    <section class="card acct-note">
+      <div class="card-head"><h2>Good to know</h2></div>
+      <ul class="muted small" style="margin:0;padding-left:18px;line-height:1.7">
+        <li>When the same song plays in a browser on this PC, the browser’s copy is used (it notices pausing right away).</li>
+        <li>SoundCloud doesn’t share pausing: a paused track keeps showing until it would have ended.</li>
+        <li>If Spotify is also linked in Discord (<b>Settings → Connections</b>), turn off <b>Display Spotify as your status</b> there, or you’ll show up twice.</li>
+        <li>Turning a service off in <b>Services</b> hides it from your accounts too.</li>
+      </ul>
+    </section>`;
 }
 
 /* ---------- stats ---------- */
@@ -851,7 +964,7 @@ function pageSettings() {
 
     <section class="card">
       <div class="card-head"><h2>About</h2><span class="muted small">Version ${esc(state.version)}</span></div>
-      <p class="muted small" style="margin:0">Presence Hub sees what you watch and listen to in your browsers and shows it as your Discord activity. It looks up video thumbnails, album art and Kick channel info online. Apart from that, nothing leaves your computer except what Discord shows on your profile.</p>
+      <p class="muted small" style="margin:0">Presence Hub sees what you watch and listen to in your browsers and shows it as your Discord activity. It looks up video thumbnails, album art, SoundCloud tracks and Kick channel info online. Accounts you connect are asked what’s playing (Spotify by its Web API, SoundCloud by its website’s API), and their sign-ins stay encrypted on this PC. Apart from that, nothing leaves your computer except what Discord shows on your profile.</p>
     </section>`;
 }
 
@@ -919,6 +1032,17 @@ function pageSetup() {
           <div class="setup-ids">${ids}</div>
         </div>
       </section>` : ''}
+
+      <section class="card step ${done(Object.values(state.accounts).some((a) => a.connected))}">
+        <div class="step-num" style="opacity:.6">${Object.values(state.accounts).some((a) => a.connected) ? ICONS.check : ICONS.accounts}</div>
+        <div>
+          <h2>Optional: connect your accounts ${Object.values(state.accounts).some((a) => a.connected) ? '<span class="badge live">Connected</span>' : ''}</h2>
+          <p class="muted" style="margin:8px 0 0">Connect Spotify or SoundCloud to also show what you play on your phone, in their desktop apps or on any other device.</p>
+          <div class="step-actions">
+            <button class="btn" data-action="nav" data-page="accounts">${ICONS.accounts}Open Connections</button>
+          </div>
+        </div>
+      </section>
 
       <section class="card step">
         <div class="step-num" style="opacity:.6">${ICONS.plus}</div>
@@ -1055,6 +1179,30 @@ document.addEventListener('click', (e) => {
     case 'test':
       runTest(id);
       break;
+    case 'account-connect':
+      api.connectAccount(id).then((res) => { if (res && !res.ok) toast(res.error); });
+      break;
+    case 'account-cancel':
+      api.cancelAccount(id);
+      break;
+    case 'account-disconnect':
+      api.disconnectAccount(id);
+      break;
+    case 'account-token-toggle':
+      tokenOpen = !tokenOpen;
+      render();
+      if (tokenOpen) setTimeout(() => document.getElementById('sc-token')?.focus(), 50);
+      break;
+    case 'account-token-save': {
+      const input = document.getElementById('sc-token');
+      if (!input || !input.value.trim()) break;
+      el.disabled = true;
+      api.useAccountToken(id, input.value).then((res) => {
+        el.disabled = false;
+        if (res && res.ok) { tokenOpen = false; tokenDraft = ''; toast('SoundCloud is connected'); render(); }
+      });
+      break;
+    }
     case 'open-url':
       e.preventDefault();
       api.openExternal(el.dataset.url);
@@ -1087,11 +1235,19 @@ document.addEventListener('change', (e) => {
     apply(api.setService(id, { options: { [key]: el.value } }));
   } else if (bind === 'logo') {
     apply(api.setService(id, { logo: el.value }));
+  } else if (bind === 'spotifyClientId') {
+    el.value = el.value.replace(/[^A-Za-z0-9]/g, '');
+    apply(api.setSettings({ spotifyClientId: el.value }));
   }
 });
 
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'sc-token') tokenDraft = e.target.value;
+});
+
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.target.matches('input.input')) e.target.blur();
+  if (e.key === 'Enter' && e.target.id === 'sc-token') document.querySelector('[data-action="account-token-save"]')?.click();
+  else if (e.key === 'Enter' && e.target.matches('input.input')) e.target.blur();
 });
 
 /* ---------- start ---------- */
@@ -1102,7 +1258,7 @@ api.onState((next) => {
 });
 api.getState().then((s) => {
   state = s;
-  if (!['dashboard', 'stats', 'services', 'settings', 'setup'].includes(page)) page = 'dashboard';
+  if (!['dashboard', 'stats', 'services', 'accounts', 'settings', 'setup'].includes(page)) page = 'dashboard';
   if (setupProgress().todo > 0 && !load('seen-setup')) {
     page = 'setup';
     save('seen-setup', '1');

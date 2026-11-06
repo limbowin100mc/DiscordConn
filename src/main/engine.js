@@ -10,17 +10,19 @@ const BUILT_IN_IDS = require('./discord-apps');
 const { clip } = require('./services/util');
 const { lineAt } = require('./lyrics');
 
+const norm = (v) => String(v || '').toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
 const STATUS_DISPLAY = { name: 0, state: 1, details: 2 };
 const HOLD_MS = 6000; // keep showing the last activity through short gaps (no flicker)
 const LYRICS_LEAD_MS = 400; // show each line a moment early; Discord takes a beat to update
 const LONG_VIDEO_MS = 10 * 60e3; // "ends at" only for movies/episodes, not short clips
 
 class Engine extends EventEmitter {
-  constructor({ store, bridge, detector, presence, appIcons, updater, lyrics, stats, info }) {
+  constructor({ store, bridge, detector, accounts, presence, appIcons, updater, lyrics, stats, info }) {
     super();
     this.store = store;
     this.bridge = bridge;
     this.detector = detector;
+    this.accounts = accounts;
     this.presence = presence;
     this.appIcons = appIcons;
     this.updater = updater;
@@ -37,6 +39,7 @@ class Engine extends EventEmitter {
     bridge.on('hello', () => { this.lastBroadcast = ''; this.schedule(); });
     bridge.on('status', () => this.emitState());
     detector.on('change', () => this.schedule());
+    if (accounts) accounts.on('change', () => this.schedule());
     presence.on('status', () => this.emitState());
     if (updater) updater.on('change', () => this.emitState());
     presence.on('applied', () => this.emitState());
@@ -61,11 +64,34 @@ class Engine extends EventEmitter {
 
   // Tabs from the browser extension, plus built-in detection. When the extension
   // already reports a site in a browser, it knows more, so the built-in result for
-  // that site and browser is skipped.
+  // that site and browser is skipped. Then what your connected accounts play.
   allTabs() {
     const ext = this.bridge.tabs().map((t) => ({ ...t, source: 'extension' }));
     const covered = new Set(ext.map((t) => `${t.browser}|${t.service}`));
-    return [...ext, ...this.detector.tabs().filter((t) => !covered.has(`${t.browser}|${t.service}`))];
+    const out = [...ext, ...this.detector.tabs().filter((t) => !covered.has(`${t.browser}|${t.service}`))];
+
+    // Your account also reports what this PC's browsers play. The browser's copy of
+    // the same song wins (it knows about pausing and seeking right away); with built-in
+    // detection, the account confirms the site and gives the exact link and cover.
+    for (const acc of this.accounts ? this.accounts.tabs() : []) {
+      const title = norm(acc.data.title);
+      const i = out.findIndex((t) => t.source !== 'account' && t.data && norm(t.data.title) === title
+        && [t, ...(t.alternatives || [])].some((x) => x.service === acc.service));
+      if (i < 0) {
+        out.push(acc);
+        continue;
+      }
+      const t = out[i];
+      if (t.source !== 'built-in') continue;
+      const self = [t, ...(t.alternatives || [])].find((x) => x.service === acc.service);
+      out[i] = {
+        ...self,
+        focusedAt: t.focusedAt,
+        alternatives: undefined,
+        data: { ...self.data, url: acc.data.url || self.data.url, cover: acc.data.cover || self.data.cover },
+      };
+    }
+    return out;
   }
 
   compute() {
@@ -216,9 +242,11 @@ class Engine extends EventEmitter {
     }
   }
 
-  // Play/pause/next/previous for what's shown (mini player buttons).
+  // Play/pause/next/previous for what's shown (mini player buttons). Not for what
+  // plays on another device: these control this PC's media.
   control(cmd) {
     const cur = this.current;
+    if (cur && cur.source === 'account') return false;
     const m = cur && /^local:([^:]+):/.exec(cur.key);
     return this.detector.control(m && m[1] !== 'win' ? m[1] : null, cmd);
   }
@@ -259,12 +287,21 @@ class Engine extends EventEmitter {
       discord: this.presence.status,
       bridge: { ...this.bridge.status, browsers: this.bridge.browsers() },
       detector: this.detector.status,
+      accounts: this.accounts ? this.accounts.status : {},
       game: this.detector.game || null,
       update: this.updater ? this.updater.state : { status: 'dev' },
       sources: this.sources.map(({ key, service, browser, source, activity, playing, status, focusedAt }) =>
         ({ key, service, browser, source, activity, playing, status, focusedAt })),
       current: this.current
-        ? { key: this.current.key, service: this.current.service, activity: this.current.activity, playing: this.current.playing, held: this.current.held, lyrics: !!this.lyricsActive }
+        ? {
+          key: this.current.key,
+          service: this.current.service,
+          activity: this.current.activity,
+          playing: this.current.playing,
+          held: this.current.held,
+          lyrics: !!this.lyricsActive,
+          remote: this.current.source === 'account', // playing on another device: no media buttons
+        }
         : null,
       paths: this.info.paths,
       packaged: this.info.packaged,

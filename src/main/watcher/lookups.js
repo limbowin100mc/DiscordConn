@@ -1,16 +1,19 @@
 'use strict';
 
 // Fills in what Windows doesn't tell us: the YouTube video (for its thumbnail and
-// link), album art for songs, and Kick channel details. Results are cached and
-// lookups for the same thing are only made once.
+// link), album art for songs, SoundCloud tracks, and Kick channel details. Results
+// are cached and lookups for the same thing are only made once.
+
+const { artwork } = require('../soundcloud-web');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKC').replace(/\s+/g, ' ').trim();
 
 class Lookups {
-  constructor(fetcher, onUpdate) {
+  constructor(fetcher, onUpdate, soundcloud = null) {
     this.fetch = fetcher;
     this.onUpdate = onUpdate;
+    this.sc = soundcloud; // SoundCloudWeb
     this.cache = new Map(); // key -> { value, at, ttl, pending }
   }
 
@@ -171,6 +174,22 @@ class Lookups {
         if (pick && pick[1].length <= 256) image = pick[1].replace(/\\u002F/g, '/');
       }
       return { title, image };
+    });
+  }
+
+  // A SoundCloud track by its title and uploader (what SoundCloud tells Windows):
+  // { url, cover, artist, album } or null.
+  soundcloud(title, uploader) {
+    if (!this.sc) return null;
+    return this._get(`sc:${title}|${uploader}`, 24 * 3600e3, async () => {
+      const { collection = [] } = await this.sc.get('/search/tracks', { q: `${title} ${uploader}`, limit: '20' });
+      const t = norm(title);
+      const u = norm(uploader);
+      const track = collection.find((x) => norm(x.title) === t && x.user && norm(x.user.username) === u)
+        || collection.find((x) => norm(x.title) === t);
+      if (!track) return null;
+      const pm = track.publisher_metadata || {};
+      return { url: track.permalink_url || null, cover: artwork(track), artist: pm.artist || '', album: pm.album_title || '' };
     });
   }
 
